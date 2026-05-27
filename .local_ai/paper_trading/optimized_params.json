@@ -1,0 +1,13 @@
+{
+  "lookback_bars": 100,
+  "trend_ema_period": 50,
+  "max_hold_bars": 50,
+  "partial_tp_at_be": true,
+  "use_dynamic_stop": true,
+  "min_dollar_volume_z": 3.0,
+  "min_price_return_z": 2.5,
+  "fixed_stop_loss_pct": 0.55,
+  "take_profit_rr": 3.5,
+  "entry_pullback_pct": 0.3,
+  "breakeven_at_rr": 0.5
+}

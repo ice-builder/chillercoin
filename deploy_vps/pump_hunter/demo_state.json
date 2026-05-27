@@ -1,0 +1,24 @@
+{
+  "scanner": "pump_hunter_v3",
+  "scan_count": 42,
+  "uptime_sec": 7200,
+  "demo_balance": 10000,
+  "wins": 1,
+  "losses": 0,
+  "total_pnl_pct": 1.8,
+  "active_positions": {},
+  "completed_trades": [
+    {
+      "symbol": "BABYUSDT",
+      "exchange": "mexc",
+      "entry": 0.02667,
+      "exit": 0.02715,
+      "peak": 0.02822,
+      "pnl_pct": 1.8,
+      "exit_reason": "manual_close_hq",
+      "pump_pct": 88,
+      "time": "2026-05-03T09:16:14.210467+00:00"
+    }
+  ],
+  "last_updated": "2026-05-03T09:16:14.210517+00:00"
+}

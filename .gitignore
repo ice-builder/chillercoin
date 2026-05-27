@@ -1,52 +1,11 @@
-# ═══════════════════════════════════════════
-# $CHILLER — Public Repo
-# ═══════════════════════════════════════════
-
-# ─── Solana Keys (CRITICAL) ───────────────
-**/id.json
-**/*-keypair.json
-*.json.bak
-*.wallet
-
-# ─── Environment / Secrets ────────────────
-.env
-.env.*
-!.env.example
-secrets.*
-config.local.*
-
-# ─── SSH Keys ─────────────────────────────
-*.pem
-*.key
-
-# ─── Build Artifacts ──────────────────────
-target/
+.DS_Store
 node_modules/
+*.log
+.env
 dist/
 build/
-*.so
-test-ledger/
-.anchor/
-
-# ─── Python ───────────────────────────────
-__pycache__/
-*.pyc
-*.pyo
-.venv/
-venv/
-
-# ─── Logs & Runtime ──────────────────────
-*.log
-trade_log.jsonl
-trade_signals.json
-
-# ─── OS ───────────────────────────────────
-.DS_Store
-Thumbs.db
-*.swp
-*~
-
-# ─── IDE ──────────────────────────────────
-.vscode/
 .idea/
 *.iml
+__pycache__/
+*.pyc
+.venv/

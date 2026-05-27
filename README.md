@@ -1,244 +1,219 @@
-<p align="center">
-  <img src="assets/banner.png" alt="$CHILLER Banner" width="100%">
-</p>
+# Local Crypto Futures Scalping NN
 
-<p align="center">
-  <strong>🧊 AI-Powered Yield Vault on Solana</strong><br>
-  <em>Deposit SOL → Get $CHILLER → AI trades → You earn. Just chill.</em>
-</p>
+Локальный стартовый проект для обучения нейросети на свечах фьючерсов и проверки импульсной скальпинг-логики без облака.
 
-<p align="center">
-  <a href="#architecture">Architecture</a> •
-  <a href="#smart-contract">Smart Contract</a> •
-  <a href="#dashboard">Dashboard</a> •
-  <a href="#security">Security</a> •
-  <a href="#roadmap">Roadmap</a>
-</p>
+Что внутри:
 
----
+- оффлайн загрузка CSV со свечами
+- загрузка реальных свечей Bybit по выбранному периоду
+- генерация импульсных и микроструктурных признаков
+- разметка `long / flat / short` по будущему движению
+- небольшая нейросеть на PyTorch
+- бэктест с комиссиями, slippage и cooldown
+- интерактивная research-среда для ручного просмотра свечей и сигналов
+- локальный LLM-vault для хранения и синтеза торговых гипотез
 
-## What is $CHILLER?
+## Формат CSV
 
-$CHILLER is a **non-custodial yield vault** on Solana. Users deposit SOL into a smart contract and receive $CHILLER tokens representing their share of the vault. AI-powered trading bots generate yield through perpetual futures on [Drift Protocol](https://drift.trade).
+Нужны колонки:
 
-### How It Works
+- `timestamp`
+- `open`
+- `high`
+- `low`
+- `close`
+- `volume`
 
-```
-1. Deposit SOL into the Vault         →  Receive $CHILLER tokens
-2. AI bots trade on Drift Protocol    →  Vault NAV grows
-3. Burn $CHILLER anytime              →  Withdraw SOL + profits
-```
+`timestamp` может быть Unix в миллисекундах или ISO-датой.
 
-### Key Features
+## Быстрый старт
 
-| Feature | Description |
-|---------|-------------|
-| 🔐 **Non-custodial** | Your funds are in a Solana smart contract, not a wallet we control |
-| 🤖 **AI Trading** | Multiple trading strategies running 24/7 on Drift Protocol |
-| 📊 **Transparent** | All trades logged on-chain, NAV updated in real-time |
-| 🧊 **Just Chill** | No active management needed — deposit and earn |
-| 🛡️ **Security First** | Two-step authority transfer, daily drain limits, emergency pause |
-
----
-
-## Architecture
-
-```
-                    ┌──────────────────────┐
-                    │   Landing Page       │
-                    │   chillercoin.io     │
-                    └──────────┬───────────┘
-                               │
-                    ┌──────────▼───────────┐
-                    │   Dashboard          │
-                    │   app.chillercoin.io │
-                    │                      │
-                    │  • Portfolio view     │
-                    │  • Deposit / Withdraw │
-                    │  • Trade history      │
-                    │  • NAV charts         │
-                    └──────────┬───────────┘
-                               │
-          Phantom / Solflare / Backpack
-                               │
-                    ┌──────────▼───────────┐
-                    │  Solana Vault         │
-                    │  (Anchor Program)     │
-                    │                       │
-                    │  • deposit()          │
-                    │  • withdraw()         │
-                    │  • update_nav()       │
-                    │  • log_trade()        │
-                    │  • drain_to_trade()   │
-                    │  • transfer_authority │
-                    └──────────┬───────────┘
-                               │
-                    ┌──────────▼───────────┐
-                    │  AI Trading Engine    │
-                    │  (Off-chain)          │
-                    │                       │
-                    │  Drift Protocol       │
-                    │  Perpetual Futures    │
-                    └──────────────────────┘
-```
-
----
-
-## Smart Contract
-
-**Program ID:** `7ayYqgiiBtXdk13f9DBFTxJoYKkZyr3AaaLt2f2TPDoH`
-
-Built with [Anchor](https://www.anchor-lang.com/) v0.31.1 on Solana.
-
-### Instructions
-
-| Instruction | Access | Description |
-|------------|--------|-------------|
-| `create_mint` | Authority | Create the $CHILLER SPL token mint |
-| `create_treasury` | Authority | Create the SOL treasury PDA |
-| `initialize` | Authority | Initialize vault with fee config |
-| `deposit` | Anyone | Deposit SOL → receive $CHILLER tokens |
-| `withdraw` | Anyone | Burn $CHILLER → receive SOL back |
-| `update_nav` | Authority | Report total assets (on-chain + Drift) |
-| `log_trade` | Authority | Log a completed trade on-chain |
-| `drain_to_trade` | Authority | Move SOL to Drift (daily limit enforced) |
-| `fund_vault` | Authority | Return profits from Drift to vault |
-| `set_paused` | Authority | Emergency pause/unpause |
-| `transfer_authority` | Authority | Propose new authority (step 1) |
-| `accept_authority` | New Auth | Accept authority transfer (step 2) |
-| `set_drain_limit` | Authority | Configure daily drain cap |
-
-### Fee Structure
-
-| Fee | Default | Max |
-|-----|---------|-----|
-| Performance | 20% of profits above HWM | 50% |
-| Management | 2% annual | 10% |
-| Withdrawal | 0.5% | 5% |
-
-### Building
+Установить зависимости:
 
 ```bash
-cd vault
-anchor build
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
 ```
 
-### Testing
+Сгенерировать демо-датасет:
 
 ```bash
-anchor test
-# 11 tests, all passing
+crypto-scalp make-demo-data --output data/demo_btcusdt_1m.csv
 ```
 
----
-
-## Dashboard
-
-A modern, responsive SPA for interacting with the vault.
-
-### Features
-- 📊 Real-time NAV chart with price history
-- 💰 Deposit SOL / Withdraw $CHILLER with preview
-- 📋 Full trade history with P&L breakdown
-- 🌙 Dark/Light theme with system preference detection
-- 🔗 Multi-wallet: Phantom, Solflare, Backpack
-- 📱 Fully responsive (mobile + desktop)
-
-### Running Locally
+Обучить модель:
 
 ```bash
-cd dashboard
-python3 -m http.server 8080
-# Open http://localhost:8080
+crypto-scalp train \
+  --data data/demo_btcusdt_1m.csv \
+  --artifacts artifacts/demo_run
 ```
 
----
+Запустить бэктест:
 
-## Security
-
-### Smart Contract Security
-- ✅ **Checked arithmetic** — all operations use `checked_add/sub` (no overflow)
-- ✅ **PDA-based accounts** — deterministic, no spoofing
-- ✅ **Authority validation** — `has_one` constraint on all admin instructions
-- ✅ **Two-step authority transfer** — propose → accept pattern prevents key loss
-- ✅ **Daily drain limits** — max 30% of TVL per epoch prevents rug pulls
-- ✅ **NAV zero protection** — cannot zero NAV with outstanding token supply
-- ✅ **Rent-exempt checks** — withdrawal respects minimum account balance
-- ✅ **Emergency pause** — instant halt of deposits/withdrawals
-- ✅ **Fee caps** — hardcoded maximums prevent fee manipulation
-- ✅ **Epoch withdrawal caps** — prevent bank runs
-
-### Infrastructure Security
-- ✅ CSP headers (Content-Security-Policy)
-- ✅ Rate limiting (30 req/s)
-- ✅ Bot blocking
-- ✅ No `innerHTML` with user data (XSS prevention)
-- ✅ SSH key-only authentication
-- ✅ fail2ban intrusion detection
-
----
-
-## Project Structure
-
-```
-chillercoin/
-├── vault/                    # Solana smart contract
-│   ├── programs/
-│   │   └── chiller-vault/
-│   │       └── src/
-│   │           └── lib.rs    # Main program (13 instructions)
-│   ├── tests/
-│   ├── Anchor.toml
-│   └── Cargo.toml
-│
-├── dashboard/                # Web dashboard (SPA)
-│   ├── index.html
-│   ├── style.css
-│   └── app.js
-│
-├── landing/                  # Marketing landing page
-│   ├── index.html
-│   ├── style.css
-│   └── script.js
-│
-└── assets/                   # Branding & media
+```bash
+crypto-scalp backtest \
+  --data data/demo_btcusdt_1m.csv \
+  --artifacts artifacts/demo_run
 ```
 
----
+Открыть исследовательскую среду:
 
-## Roadmap
+```bash
+crypto-scalp research-app \
+  --data data/demo_btcusdt_1m.csv \
+  --artifacts artifacts/demo_run
+```
 
-- [x] Smart contract — 13 instructions, security hardened
-- [x] Dashboard — multi-wallet, themes, responsive
-- [x] Landing page — marketing site
-- [x] Security audit — 20 findings, 18 resolved
-- [ ] Devnet deployment
-- [ ] Domain + SSL (chillercoin.io)
-- [ ] Telegram bot + broadcast channel
-- [ ] Mainnet launch
-- [ ] Mobile app (React Native)
+После запуска откроется локальный Streamlit-интерфейс, где можно:
 
----
+- руками выбирать CSV и папку с моделью
+- двигать окно по истории и смотреть конкретные свечи
+- видеть OHLC, объем, быстрые признаки и вероятности модели
+- исследовать участок через таблицу с признаками и таргетами
+- сверять окно графика с train/backtest summary
 
-## Tech Stack
+Скачать реальные свечи Bybit в CSV:
 
-| Component | Technology |
-|-----------|-----------|
-| Smart Contract | Rust, Anchor 0.31.1, Solana |
-| Dashboard | HTML5, CSS3, Vanilla JS |
-| Landing | HTML5, CSS3, Vanilla JS |
-| Trading | Python, Drift Protocol SDK |
-| Infrastructure | Ubuntu 24.04, Nginx, Certbot |
+```bash
+crypto-scalp download-bybit \
+  --symbol BTCUSDT \
+  --interval 1 \
+  --start 2026-04-01 \
+  --end 2026-04-16 \
+  --output data/bybit_btcusdt_1_20260401_20260416.csv
+```
 
----
+Внутри UI есть отдельная панель `Download Bybit candles`, где можно руками выбрать:
 
-## Disclaimer
+- символ, например `BTCUSDT`
+- таймфрейм, например `1`, `5`, `15`, `60`
+- дату начала
+- дату конца
+- время начала в UTC
+- время конца в UTC
+- путь сохранения CSV
+- готовые пресеты инструментов, включая `SOLUSDT`, `XRPUSDT`, `SUIUSDT`
+- прогресс загрузки по чанкам
+- автоматическое использование уже сохраненного локального CSV, если он полностью покрывает выбранный диапазон без пропусков
 
-> ⚠️ **$CHILLER is experimental software.** Use at your own risk. Past performance does not guarantee future results. This is not financial advice. The smart contract has not been audited by a third party. Only deposit what you can afford to lose.
+## Minute Impulse And Paper Trading
 
----
+Bybit API дает минимальные готовые свечи `1m`, поэтому основной алгоритм строится вокруг минутных импульсов:
 
-<p align="center">
-  <strong>🧊 Just Chill & Earn</strong><br>
-  <em>$CHILLER — AI-Powered Yield Vault on Solana</em>
-</p>
+- `dollar_volume = turnover` из Bybit, если поле есть
+- иначе `dollar_volume = close * volume`
+- резкое движение ищется через `$ volume z` относительно обычного режима
+- одновременно проверяется `price return z`
+- гипотеза хранит стоп, отмену, take-profit и порог допуска в paper trading
+
+Рабочий поток:
+
+- выбрать участок на графике в `Market Research`
+- отправить его в `Hypothesis Vault`
+- в карточке гипотезы нажать `Study on history`
+- посмотреть `Похожих паттернов`, `Сделок`, `Win rate`
+- если результат проходит порог, нажать `Send to paper test`
+- открыть вкладку `Paper Trading` и запустить demo-loop
+
+Запуск paper-loop из CLI:
+
+```bash
+crypto-scalp paper-trade-live \
+  --symbol SOLUSDT \
+  --duration-seconds 300 \
+  --deposit-usdt 1000
+```
+
+Paper-loop использует исторический CSV из проверки гипотезы как baseline для обычного режима, а live-поток агрегирует в `1m+` бары под таймфрейм гипотезы.
+
+## Local AI Vault
+
+Под твой `Mac mini M4 16 GB` рекомендую:
+
+- основной reasoning-моделью `qwen3:4b`
+- для поиска по гипотезам `embeddinggemma`
+
+Почему так:
+
+- `qwen3:4b` дает хороший баланс качества, скорости и памяти
+- `embeddinggemma` легкая и подходит для semantic search по локальной базе гипотез
+- обе модели удобно запускать через Ollama на macOS
+
+Инициализация vault:
+
+```bash
+source .venv/bin/activate
+crypto-scalp ai-init
+```
+
+Скачать модели:
+
+```bash
+ollama serve
+crypto-scalp ai-pull --model qwen3:4b
+crypto-scalp ai-pull --model embeddinggemma
+```
+
+Добавить гипотезу:
+
+```bash
+crypto-scalp hypothesis-add \
+  --title "BTC impulse after volume burst" \
+  --thesis "Если на 1m идет всплеск объема и пробой локального high, импульс часто продолжается 3-5 свечей" \
+  --evidence "На BTCUSDT в лондонскую сессию это видно чаще при ret_fast > 0 и volume_z > 2" \
+  --tags "btc,impulse,volume,breakout" \
+  --symbol BTCUSDT \
+  --timeframe 1m
+```
+
+Поиск по vault:
+
+```bash
+crypto-scalp hypothesis-search --query "volume breakout on BTC 1m"
+```
+
+Синтез идей локальной моделью:
+
+```bash
+crypto-scalp hypothesis-synthesize \
+  --query "Какие сетапы по BTCUSDT 1m у нас уже подтверждаются?" \
+  --symbol BTCUSDT \
+  --timeframe 1m \
+  --top-k 8 \
+  --batch-size 4
+```
+
+Теперь synthesis идет не по всему vault целиком, а через memory pipeline:
+
+- retrieval отбирает релевантные гипотезы и релевантные summary memories
+- batch summaries сжимают найденные гипотезы в короткие кластеры
+- final synthesis строится уже по этим выжимкам, чтобы не упираться в контекстное окно модели
+- batch и final summaries сохраняются в SQLite как отдельный summary-memory слой
+
+Посмотреть накопленный слой summaries:
+
+```bash
+crypto-scalp summary-memory-list --symbol BTCUSDT --timeframe 1m
+```
+
+## Идея стратегии
+
+Модель ищет импульсные моменты:
+
+- ускорение доходности на коротком окне
+- всплеск объема
+- расширение диапазона свечи
+- отклонение цены от краткосрочной средней
+- сочетание momentum и volatility breakout
+
+Разметка строится по будущему движению за несколько свечей вперед. Если ожидаемое движение выше порога вверх, класс `long`, если вниз, класс `short`, иначе `flat`.
+
+## Важные замечания
+
+- Это research scaffold, а не готовый боевой бот.
+- Для реальной торговли нужны биржевой коннектор, order management, latency-замеры и строгий риск-менеджмент.
+- Для фьючерсов обязательно учитывай комиссию, funding, slippage, ликвидационные риски и limit на плечо.
+- Для UI нужны `streamlit` и `plotly`, они уже добавлены в зависимости проекта.
+- Для скачивания Bybit используется публичный REST API V5 `/v5/market/kline`.

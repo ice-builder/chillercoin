@@ -1,0 +1,103 @@
+{
+  "current_version": "v3",
+  "versions": [
+    {
+      "version": "v1",
+      "timestamp": "2026-04-28T17:15:00Z",
+      "description": "Initial deployment — default z-score + 16 confluence strategies",
+      "params": {
+        "lookback_bars": 100,
+        "min_dollar_volume_z": 3.0,
+        "min_price_return_z": 2.5,
+        "fixed_stop_loss_pct": 0.35,
+        "take_profit_rr": 3.0,
+        "max_hold_bars": 50,
+        "entry_pullback_pct": 0.5,
+        "trend_ema_period": 50,
+        "breakeven_at_rr": 0.3,
+        "partial_tp_at_be": true,
+        "use_dynamic_stop": true,
+        "account_risk_pct": 0.10
+      },
+      "performance": {
+        "trades": 12,
+        "wins": 2,
+        "losses": 10,
+        "win_rate": 0.167,
+        "total_pnl_pct": -0.118,
+        "profit_factor": 0.78,
+        "max_loss_streak": 9,
+        "dominant_exit": "breakeven (100%)",
+        "dominant_strategy": "default_zscore (100%)",
+        "duration_hours": 36,
+        "notes": "Confluence strategies produced 0 signals. All trades from default_zscore fallback. Breakeven at 0.3R too aggressive — activates early, takes tiny partial, then price reverses to -commission."
+      },
+      "verdict": "❌ FAILING — breakeven mechanic bleeds on commissions"
+    },
+    {
+      "version": "v2",
+      "timestamp": "2026-04-29T07:35:00Z",
+      "description": "Fix breakeven bleed: increase breakeven_at_rr from 0.3 to 1.0",
+      "changes": [
+        {
+          "param": "breakeven_at_rr",
+          "old": 0.3,
+          "new": 1.0,
+          "reason": "0.3R triggered BE too early."
+        }
+      ],
+      "performance": {
+        "trades": 14,
+        "wins": 4,
+        "losses": 10,
+        "win_rate": 0.286,
+        "total_pnl_pct": 0.495,
+        "duration_hours": 21,
+        "notes": "Breakeven still leaks on small stops. Duplicate trades inflated trade count (real ~7-8 unique). exit_price showed candle close, not fill price — PnL and exit_price contradicted each other."
+      },
+      "verdict": "⚠️ PARTIAL — PnL positive but exit_price bug + duplicates"
+    },
+    {
+      "version": "v3",
+      "timestamp": "2026-04-30T09:25:00Z",
+      "description": "Exit price accuracy, duplicate prevention, PnL from real prices",
+      "changes": [
+        {
+          "param": "exit_price_logic",
+          "old": "candle close",
+          "new": "real fill price (TP→tp_price, SL→stop_price, BE→entry_price)",
+          "reason": "exit_price contradicted PnL — showed candle close instead of actual fill"
+        },
+        {
+          "param": "pnl_calculation",
+          "old": "abstract percentages (be_pct*0.5 + stop*0.5)",
+          "new": "(exit_price / entry_price - 1) * 100 - commission",
+          "reason": "PnL now derived from actual entry→exit prices"
+        },
+        {
+          "param": "trade_cooldown",
+          "old": "none",
+          "new": "600 seconds (10 min)",
+          "reason": "Same signal fired on consecutive bars, creating duplicate trades"
+        },
+        {
+          "param": "min_be_pct",
+          "old": "stop_pct * be_rr (could be as low as 0.1%)",
+          "new": "max(stop_pct * be_rr, 0.275%)",
+          "reason": "Partial TP of 0.1% * 0.5 = 0.05% couldn't cover 0.11% commission"
+        },
+        {
+          "param": "partial_exit_price",
+          "old": "not tracked",
+          "new": "stored + used for weighted average exit_price",
+          "reason": "Transparency: Telegram now shows partial TP price"
+        }
+      ],
+      "performance": {
+        "trades": 0,
+        "notes": "Fresh deploy — stats reset. Awaiting results."
+      },
+      "verdict": "⏳ IN PROGRESS"
+    }
+  ]
+}

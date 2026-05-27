@@ -1,0 +1,27 @@
+{
+  "feature": {
+    "lookback_fast": 3,
+    "lookback_slow": 12,
+    "volume_window": 20,
+    "volatility_window": 20
+  },
+  "label": {
+    "horizon": 5,
+    "min_move_pct": 0.0015
+  },
+  "train": {
+    "train_split": 0.8,
+    "epochs": 30,
+    "batch_size": 256,
+    "hidden_dim": 64,
+    "lr": 0.001,
+    "weight_decay": 0.0001,
+    "seed": 42
+  },
+  "backtest": {
+    "fee_bps": 4.0,
+    "slippage_bps": 1.5,
+    "decision_threshold": 0.48,
+    "cooldown_bars": 3
+  }
+}
