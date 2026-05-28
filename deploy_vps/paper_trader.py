@@ -640,18 +640,25 @@ def fetch_pending_signals(db_path: str, max_age_sec: int = 3600) -> List[dict]:
     conn = sqlite3.connect(db_path, timeout=5)
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
-            """SELECT id, impulse_id, symbol, direction, price, score,
-                      confidence, sl_pct, tp_pct, trail_pct, hold_bars,
-                      size_mult, market_phase, will_continue_prob,
-                      stop_hunt_prob, coin_quality, reason, created_at
-               FROM pending_signals
-               WHERE created_at > ? AND score >= ?
-               ORDER BY score DESC
-               LIMIT 20""",
-            (cutoff, IIE_MIN_SCORE)
-        ).fetchall()
-        return [dict(r) for r in rows]
+        # v2.0: Fetch top 10 long + top 10 short separately
+        # to prevent one direction from monopolizing all signal slots
+        results = []
+        for direction in ('long', 'short'):
+            rows = conn.execute(
+                """SELECT id, impulse_id, symbol, direction, price, score,
+                          confidence, sl_pct, tp_pct, trail_pct, hold_bars,
+                          size_mult, market_phase, will_continue_prob,
+                          stop_hunt_prob, coin_quality, reason, created_at
+                   FROM pending_signals
+                   WHERE created_at > ? AND score >= ?
+                     AND direction = ?
+                   ORDER BY score DESC
+                   LIMIT 10""",
+                (cutoff, IIE_MIN_SCORE, direction)
+            ).fetchall()
+            results.extend([dict(r) for r in rows])
+        results.sort(key=lambda x: x.get('score', 0), reverse=True)
+        return results
     except Exception as e:
         logger.warning(f"IIE pending_signals query failed: {e}")
         return []

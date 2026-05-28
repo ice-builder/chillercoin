@@ -198,24 +198,38 @@ def load_state(path: Path) -> ProState:
 
 # ── IIE Signal Intake ─────────────────────────────────────────────────────────
 
+SIGNAL_MAX_AGE_SEC = 86400  # Only consider signals from last 24h
+
 def get_iie_signals(min_score: float = 70) -> List[dict]:
     """
     Read pending signals from IIE v1 database.
-    Same source as Soldier — we just read, never write to IIE v1 DB.
+    v2.0: Fetches BOTH long and short signals separately to ensure
+    short signals aren't crowded out by high-score longs.
+    Also limits to recent signals (24h) to avoid stale data.
     """
     if not IIE_V1_DB.exists():
         return []
     try:
         conn = sqlite3.connect(str(IIE_V1_DB), timeout=5)
         conn.row_factory = sqlite3.Row
-        rows = conn.execute("""
-            SELECT * FROM pending_signals
-            WHERE processed = 0 AND score >= ?
-            ORDER BY score DESC
-            LIMIT 20
-        """, (min_score,)).fetchall()
+        min_time = time.time() - SIGNAL_MAX_AGE_SEC
+
+        # Fetch top 10 long + top 10 short separately
+        results = []
+        for direction in ('long', 'short'):
+            rows = conn.execute("""
+                SELECT * FROM pending_signals
+                WHERE processed = 0 AND score >= ?
+                  AND direction = ? AND created_at >= ?
+                ORDER BY score DESC
+                LIMIT 10
+            """, (min_score, direction, min_time)).fetchall()
+            results.extend([dict(r) for r in rows])
+
         conn.close()
-        return [dict(r) for r in rows]
+        # Sort combined by score descending
+        results.sort(key=lambda x: x.get('score', 0), reverse=True)
+        return results
     except Exception as e:
         logger.warning(f"IIE signal read failed: {e}")
         return []
@@ -251,6 +265,33 @@ def run_scalper_pro():
     from tg_bot import ScalperProTGBot
     tg_bot = ScalperProTGBot(db)
     tg_bot.start()
+
+    # ── Rebuild stops/sizer for loaded positions (survive PM2 restarts) ────
+    if state.active_positions:
+        logger.info(
+            f"🔧 Rebuilding stops/sizer for {len(state.active_positions)} "
+            f"loaded positions..."
+        )
+        for sym, pos in state.active_positions.items():
+            if pos.db_trade_id:
+                stops.init_trade(
+                    trade_id=pos.db_trade_id,
+                    entry_price=pos.entry_price,
+                    direction=pos.direction,
+                    sl_pct=pos.stop_pct,
+                    tp_pct=pos.tp_pct,
+                    trail_pct=DEFAULT_TRAIL_PCT,
+                )
+                sizer.init_trade(
+                    trade_id=pos.db_trade_id,
+                    direction=pos.direction,
+                    entry_price=pos.entry_price,
+                    initial_size_usdt=pos.size_usdt,
+                )
+                logger.info(
+                    f"  ✅ {sym} {pos.direction} #{pos.db_trade_id}: "
+                    f"stops+sizer rebuilt"
+                )
 
     # Tracking
     cooldowns: Dict[str, float] = {}
