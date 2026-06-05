@@ -155,9 +155,6 @@ async def main_async(args: argparse.Namespace) -> None:
                     binance.stop()
                     bybit.stop()
                     market_collector.stop()
-                    # TG alert о Kill Switch
-                    if tg_alert.enabled:
-                        asyncio.create_task(tg_alert.alert_kill_switch("KILL_SWITCH file detected"))
             else:
                 if state["risk"]["kill_switch"]:
                     print("✅ Файл KILL_SWITCH удален. Запускаем сборщики...")
@@ -222,18 +219,6 @@ async def main_async(args: argparse.Namespace) -> None:
                         if len(state["last_signals"]) > 20:
                             state["last_signals"] = state["last_signals"][:20]
 
-                        # TG алерт о торговых сигналах
-                        if tg_alert.enabled and decision.signal_type in (
-                            "PAPER_LONG_SETUP", "PAPER_SHORT_SETUP",
-                            "PAPER_CASCADE_RISK", "PAPER_REVERSION_WATCH",
-                        ):
-                            asyncio.create_task(tg_alert.alert_signal(decision.to_dict()))
-
-                    # TG алерт об экстремальном стрессе
-                    if tg_alert.enabled and res.level in ("EXTREME", "NO_TRADE"):
-                        asyncio.create_task(
-                            tg_alert.alert_stress_extreme(symbol, res.score, res.level)
-                        )
                 except Exception as exc:
                     print(f"⚠️ Ошибка вычисления стресса/сигнала для {symbol}: {exc}")
 
@@ -266,11 +251,48 @@ async def main_async(args: argparse.Namespace) -> None:
                     if price is not None:
                         mark_prices[symbol] = price
                 
+                # Запоминаем текущие открытые трейды ДО проверок
+                trades_before = {t.id for t in db.get_open_paper_trades()}
+
                 # 2. Проверяем выходы
                 paper_simulator.check_exits(mark_prices, kill_active, now_ms)
                 
+                # TG: проверяем закрытые сделки
+                if tg_alert.enabled:
+                    trades_after_exit = {t.id for t in db.get_open_paper_trades()}
+                    closed_ids = trades_before - trades_after_exit
+                    if closed_ids:
+                        # Получаем закрытые трейды из БД
+                        for closed_id in closed_ids:
+                            try:
+                                closed_trade = db.get_paper_trade_by_id(closed_id)
+                                if closed_trade:
+                                    asyncio.create_task(tg_alert.alert_trade_close({
+                                        "symbol": closed_trade.symbol,
+                                        "side": closed_trade.side,
+                                        "net_pnl_usdt": closed_trade.net_pnl_usdt or 0,
+                                        "close_reason": closed_trade.close_reason or "UNKNOWN",
+                                    }))
+                            except Exception:
+                                pass
+
                 # 3. Проверяем входы
                 paper_simulator.check_entries(last_decisions, mark_prices, now_ms)
+
+                # TG: проверяем новые сделки
+                if tg_alert.enabled:
+                    trades_after_entry = {t.id for t in db.get_open_paper_trades()}
+                    new_ids = trades_after_entry - trades_before
+                    if new_ids:
+                        for new_trade_obj in db.get_open_paper_trades():
+                            if new_trade_obj.id in new_ids:
+                                asyncio.create_task(tg_alert.alert_trade_open({
+                                    "symbol": new_trade_obj.symbol,
+                                    "side": new_trade_obj.side,
+                                    "price": new_trade_obj.entry_price,
+                                    "stop_loss": new_trade_obj.stop_loss,
+                                    "take_profit": new_trade_obj.take_profit,
+                                }))
                 
                 # 4. Считаем и пишем точку эквити в БД
                 paper_simulator.calculate_equity_point(now_ms)
@@ -328,11 +350,8 @@ async def main_async(args: argparse.Namespace) -> None:
             except Exception as sim_exc:
                 print(f"⚠️ Ошибка симулятора бумажной торговли: {sim_exc}")
 
-            # Stale detection — проверяем shadow disconnect
+            # Stale detection — проверяем shadow disconnect (логируем, но не шлём в TG)
             tracker.check_stale_sources()
-            for source in ["binance", "bybit"]:
-                if state["sources"][source]["ws_status"] == "stale" and tg_alert.enabled:
-                    asyncio.create_task(tg_alert.alert_source_stale(source))
 
             # Атомарная запись состояния
             writer.write(state)
@@ -354,8 +373,12 @@ async def main_async(args: argparse.Namespace) -> None:
         binance.stop()
         bybit.stop()
         market_collector.stop()
-        if tg_alert.enabled:
-            asyncio.get_event_loop().run_until_complete(tg_alert.close())
+        # Закрываем TG session (best effort)
+        try:
+            if tg_alert.enabled and tg_alert._session and not tg_alert._session.closed:
+                await tg_alert.close()
+        except Exception:
+            pass
 
         if server:
             server.should_exit = True
