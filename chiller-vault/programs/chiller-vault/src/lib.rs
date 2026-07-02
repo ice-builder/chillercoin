@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
+use anchor_lang::solana_program::bpf_loader_upgradeable;
 use anchor_spl::token::{self, Burn, Mint, MintTo, Token};
 
 declare_id!("7ayYqgiiBtXdk13f9DBFTxJoYKkZyr3AaaLt2f2TPDoH");
@@ -25,7 +26,8 @@ pub struct VaultState {
     pub pending_authority: Pubkey, // 32 — H-01: two-step authority transfer
     pub chiller_mint: Pubkey,      // 32
     pub team_wallet: Pubkey,       // 32
-    pub total_assets: u64,         // 8  — in lamports (vault + drift combined)
+    pub trade_wallet: Pubkey,      // 32 — C-1: whitelisted destination for drain
+    pub total_assets: u64,         // 8  — in lamports (on-chain portion)
     pub total_supply: u64,         // 8  — $CHILLER total supply (6 decimals)
     pub high_water_mark: u64,      // 8
     pub total_trades: u64,         // 8
@@ -43,31 +45,41 @@ pub struct VaultState {
     pub epoch_drained: u64,        // 8  — H-02: drained this epoch
     pub last_drain_epoch: u64,     // 8  — H-02: epoch tracker for drain reset
     pub assets_on_drift: u64,      // 8  — C-1: SOL currently on Drift (drained)
+    pub drift_cost_basis: u64,     // 8  — N-5: cumulative SOL sent to Drift (for realized P&L)
     pub pause_timestamp: i64,      // 8  — H-4: when pause was activated
     pub is_paused: bool,           // 1
+    pub initialized: bool,         // 1  — H-1: prevents re-init front-run
     pub bump: u8,                  // 1
     pub chiller_mint_bump: u8,     // 1
     pub sol_vault_bump: u8,        // 1
 }
 
 impl VaultState {
+    /// N-1 FIX: Total system value = on-chain + off-chain (Drift)
+    pub fn effective_assets(&self) -> u64 {
+        self.total_assets.saturating_add(self.assets_on_drift)
+    }
     /// NAV per $CHILLER token, scaled to 1e6
+    /// N-1 FIX: uses effective_assets (vault + drift)
     pub fn nav_per_token(&self) -> u64 {
         if self.total_supply == 0 { return 1_000_000; }
-        ((self.total_assets as u128 * 1_000_000) / self.total_supply as u128) as u64
+        ((self.effective_assets() as u128 * 1_000_000) / self.total_supply as u128) as u64
     }
     /// How many $CHILLER tokens for a deposit of `lamports`
+    /// M-2 FIX: accounts for 6 decimal places on mint
     pub fn tokens_for_deposit(&self, lamports: u64) -> u64 {
-        if self.total_supply == 0 || self.total_assets == 0 {
-            // Initial price: 1 $CHILLER = 0.01 SOL (10_000_000 lamports)
-            return lamports / 10_000_000;
+        let eff = self.effective_assets();
+        if self.total_supply == 0 || eff == 0 {
+            // Initial price: 1 $CHILLER (1e6 raw) = 0.01 SOL (1e7 lamports)
+            // tokens_raw = lamports * 1e6 / 1e7 = lamports / 10
+            return lamports / 10;
         }
-        ((lamports as u128 * self.total_supply as u128) / self.total_assets as u128) as u64
+        ((lamports as u128 * self.total_supply as u128) / eff as u128) as u64
     }
     /// How many lamports for burning `tokens` $CHILLER
     pub fn sol_for_withdrawal(&self, tokens: u64) -> u64 {
         if self.total_supply == 0 { return 0; }
-        ((tokens as u128 * self.total_assets as u128) / self.total_supply as u128) as u64
+        ((tokens as u128 * self.effective_assets() as u128) / self.total_supply as u128) as u64
     }
 }
 
@@ -94,6 +106,11 @@ pub enum VaultError {
     #[msg("NAV update cooldown (1h)")] NavUpdateTooFrequent,
     #[msg("NAV exceeds real assets")] NavExceedsRealAssets,
     #[msg("Drain limit too high")] DrainLimitTooHigh,
+    #[msg("Invalid trade wallet")] InvalidTradeWallet,
+    #[msg("Pause cooldown active")] PauseCooldown,
+    #[msg("Slippage exceeded")] SlippageExceeded,                    // M-1
+    #[msg("Vault already initialized")] AlreadyInitialized,          // H-1
+    #[msg("Invalid mint decimals (expected 6)")] InvalidMintDecimals, // M-2
 }
 
 // ═══════════════════════════════════════════════
@@ -178,13 +195,28 @@ pub mod chiller_vault {
     }
 
     /// Initialize vault with fee config
+    /// H-1 FIX: verifies authority == program upgrade authority (anti front-run)
     pub fn initialize(ctx: Context<InitVault>, perf: u16, mgmt: u16, wfee: u16, min_dep: u64, max_wd: u64) -> Result<()> {
         require!(perf <= 5000 && mgmt <= 1000 && wfee <= 500, VaultError::InvalidFeeConfig);
+        // M-2 FIX: Validate mint decimals match expected (6)
+        require!(ctx.accounts.chiller_mint.decimals == 6, VaultError::InvalidMintDecimals);
+
+        // H-1 FIX: Verify caller is the program's upgrade authority
+        // ProgramData layout: 4 bytes (type) + 8 bytes (slot) + 1 byte (Option tag) + 32 bytes (pubkey)
+        let pd = ctx.accounts.program_data.try_borrow_data()?;
+        require!(pd.len() >= 45, VaultError::Unauthorized);
+        require!(pd[12] == 1, VaultError::Unauthorized); // Option::Some
+        let upgrade_auth = Pubkey::try_from(&pd[13..45]).map_err(|_| VaultError::Unauthorized)?;
+        require!(ctx.accounts.authority.key() == upgrade_auth, VaultError::Unauthorized);
+        drop(pd);
+
         let v = &mut ctx.accounts.vault;
+        require!(!v.initialized, VaultError::AlreadyInitialized);
         v.authority = ctx.accounts.authority.key();
         v.pending_authority = Pubkey::default();  // H-01: no pending transfer
         v.chiller_mint = ctx.accounts.chiller_mint.key();
         v.team_wallet = ctx.accounts.team_wallet.key();
+        v.trade_wallet = ctx.accounts.trade_wallet.key(); // C-1: whitelisted trade dest
         v.total_assets = 0; v.total_supply = 0; v.high_water_mark = 0;
         v.total_trades = 0; v.total_wins = 0; v.cumulative_pnl_bps = 0;
         v.performance_fee_bps = perf; v.management_fee_bps = mgmt; v.withdrawal_fee_bps = wfee;
@@ -196,8 +228,10 @@ pub mod chiller_vault {
         v.epoch_drained = 0;
         v.last_drain_epoch = 0;
         v.assets_on_drift = 0;      // C-1: no SOL on Drift initially
+        v.drift_cost_basis = 0;     // N-5: no SOL sent to Drift yet
         v.pause_timestamp = 0;      // H-4: not paused
         v.is_paused = false;
+        v.initialized = true;       // H-1: mark as initialized
         v.bump = ctx.bumps.vault;
         v.chiller_mint_bump = ctx.bumps.chiller_mint;
         v.sol_vault_bump = ctx.accounts.sol_vault.bump;
@@ -206,13 +240,16 @@ pub mod chiller_vault {
     }
 
     /// Deposit SOL → receive $CHILLER tokens
-    pub fn deposit(ctx: Context<DepositCtx>, amount: u64) -> Result<()> {
+    /// M-1 FIX: slippage protection via min_tokens_out
+    pub fn deposit(ctx: Context<DepositCtx>, amount: u64, min_tokens_out: u64) -> Result<()> {
         let v = &ctx.accounts.vault;
         require!(!v.is_paused, VaultError::VaultPaused);
         require!(amount > 0, VaultError::ZeroAmount);
         require!(amount >= v.min_deposit, VaultError::DepositBelowMinimum);
         let tokens = v.tokens_for_deposit(amount);
         require!(tokens > 0, VaultError::MathOverflow);
+        // M-1 FIX: slippage check — user specifies minimum acceptable tokens
+        require!(tokens >= min_tokens_out, VaultError::SlippageExceeded);
         let nav = v.nav_per_token();
 
         // Transfer SOL: user → sol_vault PDA
@@ -242,7 +279,8 @@ pub mod chiller_vault {
     }
 
     /// Withdraw: burn $CHILLER → receive SOL
-    pub fn withdraw(ctx: Context<WithdrawCtx>, tokens: u64) -> Result<()> {
+    /// M-1 FIX: slippage protection via min_sol_out
+    pub fn withdraw(ctx: Context<WithdrawCtx>, tokens: u64, min_sol_out: u64) -> Result<()> {
         let v = &ctx.accounts.vault;
         // H-4 FIX: auto-unpause after 24 hours
         if v.is_paused {
@@ -254,6 +292,8 @@ pub mod chiller_vault {
         require!(gross > 0, VaultError::MathOverflow);
         let fee = (gross as u128 * v.withdrawal_fee_bps as u128 / 10_000) as u64;
         let net = gross.checked_sub(fee).ok_or(VaultError::MathOverflow)?;
+        // M-1 FIX: slippage check — user specifies minimum acceptable SOL
+        require!(net >= min_sol_out, VaultError::SlippageExceeded);
         let nav = v.nav_per_token();
 
         // Check sol_vault has enough (above rent-exempt minimum)
@@ -291,72 +331,69 @@ pub mod chiller_vault {
         Ok(())
     }
 
-    /// Update NAV — authority reports total assets (on-chain + Drift)
+    /// Update NAV — authority reports total effective assets (on-chain + Drift)
+    /// N-4 FIX: accepts mark-to-market for vault AND drift separately
+    /// N-5 FIX: ceiling from stored state, NO perf fee here (realized-only at fund_vault)
     /// C-3 FIX: ±10% cap per update, 1h cooldown, real-assets ceiling
-    pub fn update_nav(ctx: Context<UpdateNAVCtx>, new_total: u64) -> Result<()> {
+    pub fn update_nav(ctx: Context<UpdateNAVCtx>, new_vault_value: u64, new_drift_value: u64) -> Result<()> {
         let v = &ctx.accounts.vault;
+        let new_effective = new_vault_value.saturating_add(new_drift_value);
+
         // M-02: Prevent zeroing NAV with outstanding supply
-        require!(new_total > 0 || v.total_supply == 0, VaultError::NavCannotBeZero);
+        require!(new_effective > 0 || v.total_supply == 0, VaultError::NavCannotBeZero);
 
         // C-3 FIX: Cooldown — minimum 1 hour between NAV updates
         let now = Clock::get()?.unix_timestamp;
         require!(now - v.last_nav_update >= 3600, VaultError::NavUpdateTooFrequent);
 
-        // C-3 FIX: Cap change to ±10% per update
-        let old_total = v.total_assets;
-        if old_total > 0 {
-            let max_change = old_total / 10; // 10%
-            let diff = if new_total > old_total {
-                new_total - old_total
+        // N-1 FIX: Cap change to ±10% of current effective_assets
+        let old_effective = v.effective_assets();
+        if old_effective > 0 {
+            let max_change = old_effective / 10; // 10%
+            let diff = if new_effective > old_effective {
+                new_effective - old_effective
             } else {
-                old_total - new_total
+                old_effective - new_effective
             };
             require!(diff <= max_change, VaultError::NavChangeTooLarge);
         }
 
-        // C-3 FIX: NAV cannot exceed real assets + drift + 10% margin
+        // N-5b FIX: Ceiling uses drift_cost_basis (NOT assets_on_drift which we overwrite)
+        // cost_basis is only modified by drain_to_trade/fund_vault, never by update_nav
+        // This prevents compounding: Aₙ = A₀·1.1ⁿ attack via repeated update_nav calls
         let real_balance = ctx.accounts.sol_vault.to_account_info().lamports();
         let max_nav = real_balance
-            .saturating_add(v.assets_on_drift)
-            .saturating_add(v.assets_on_drift / 10); // +10% margin for trading profits
-        require!(new_total <= max_nav, VaultError::NavExceedsRealAssets);
+            .saturating_add(v.drift_cost_basis)
+            .saturating_add(v.drift_cost_basis / 10); // +10% for real trading gains
+        require!(new_effective <= max_nav, VaultError::NavExceedsRealAssets);
 
         let old_nav = v.nav_per_token();
-        let mut pfee: u64 = 0; let mut after = new_total;
 
-        // Performance fee on new profits above HWM
-        if new_total > v.high_water_mark && v.high_water_mark > 0 {
-            let profit = new_total - v.high_water_mark;
-            pfee = (profit as u128 * v.performance_fee_bps as u128 / 10_000) as u64;
-            after = new_total.checked_sub(pfee).ok_or(VaultError::MathOverflow)?;
-        }
+        // N-5 FIX: NO performance fee in update_nav
+        // Perf fee is only charged on REALIZED profit in fund_vault
+        // This prevents extracting real SOL from unrealized mark-to-market gains
 
-        // Transfer perf fee in SOL: sol_vault → team_wallet (program-owned, direct ok)
-        if pfee > 0 {
-            let sol_vault_info = ctx.accounts.sol_vault.to_account_info();
-            let rent_min = Rent::get()?.minimum_balance(8 + 1);
-            let available = sol_vault_info.lamports().checked_sub(rent_min).unwrap_or(0);
-            let actual_fee = pfee.min(available); // Don't transfer more than available
-            if actual_fee > 0 {
-                **sol_vault_info.try_borrow_mut_lamports()? -= actual_fee;
-                **ctx.accounts.team_wallet.try_borrow_mut_lamports()? += actual_fee;
-            }
-        }
-
+        // N-4 FIX: Update both fields directly (mark-to-market)
         let v = &mut ctx.accounts.vault;
-        v.total_assets = after; v.last_nav_update = now;
-        if after > v.high_water_mark { v.high_water_mark = after; }
+        v.total_assets = new_vault_value;
+        v.assets_on_drift = new_drift_value;
+        v.last_nav_update = now;
+        if new_effective > v.high_water_mark { v.high_water_mark = new_effective; }
         let new_nav = v.nav_per_token();
 
-        emit!(NAVUpdated { old_total_assets: old_total, new_total_assets: after, old_nav, new_nav, perf_fee_collected: pfee, total_supply: v.total_supply, timestamp: now });
+        msg!("📊 NAV updated: vault={} drift={} effective={} nav={}", 
+             new_vault_value, new_drift_value, new_effective, new_nav);
+        emit!(NAVUpdated { old_total_assets: old_effective, new_total_assets: new_effective, old_nav, new_nav, perf_fee_collected: 0, total_supply: v.total_supply, timestamp: now });
         Ok(())
     }
 
-    /// Drain SOL from vault to authority (for Drift trading)
-    /// C-1/C-2 FIX: debits total_assets, tracks assets_on_drift
-    /// C-4 FIX: limit based on real vault balance, not total_assets
+    /// Drain SOL from vault to trade_wallet (for Drift trading)
+    /// C-1 FIX: sends to whitelisted trade_wallet, NOT authority
+    /// C-4 FIX: limit based on real vault balance
     pub fn drain_to_trade(ctx: Context<DrainCtx>, amount: u64) -> Result<()> {
         require!(amount > 0, VaultError::ZeroAmount);
+        // C-1: trade_wallet verified by DrainCtx address constraint
+
         let sol_vault_info = ctx.accounts.sol_vault.to_account_info();
         let rent_min = Rent::get()?.minimum_balance(8 + 1);
         let available = sol_vault_info.lamports().checked_sub(rent_min).unwrap_or(0);
@@ -369,34 +406,37 @@ pub mod chiller_vault {
             v.last_drain_epoch = day;
             v.epoch_drained = 0;
         }
-        // C-4 FIX: Dynamic limit based on REAL vault balance, not total_assets
+        // C-4 FIX: Dynamic limit based on REAL vault balance
         let dynamic_limit = if available > 0 {
             (available as u128 * 30 / 100) as u64
         } else {
-            0 // Nothing to drain
+            0
         };
         let effective_limit = v.drain_per_epoch.min(dynamic_limit);
         v.epoch_drained = v.epoch_drained.checked_add(amount).ok_or(VaultError::MathOverflow)?;
         require!(v.epoch_drained <= effective_limit, VaultError::DrainEpochLimitExceeded);
 
-        // Transfer SOL
+        // C-1 FIX: Transfer SOL to trade_wallet (NOT authority)
         let sol_vault_info = ctx.accounts.sol_vault.to_account_info();
         **sol_vault_info.try_borrow_mut_lamports()? -= amount;
-        **ctx.accounts.authority.try_borrow_mut_lamports()? += amount;
+        **ctx.accounts.trade_wallet.try_borrow_mut_lamports()? += amount;
 
-        // C-1/C-2 FIX: debit total_assets and track drift allocation
+        // N-1 FIX: move from total_assets to assets_on_drift (effective_assets unchanged)
         v.total_assets = v.total_assets.checked_sub(amount).ok_or(VaultError::MathOverflow)?;
         v.assets_on_drift = v.assets_on_drift.checked_add(amount).ok_or(VaultError::MathOverflow)?;
+        // N-5: track cost basis for realized profit calculation
+        v.drift_cost_basis = v.drift_cost_basis.checked_add(amount).ok_or(VaultError::MathOverflow)?;
 
         let remaining = ctx.accounts.sol_vault.to_account_info().lamports();
         emit!(VaultDrained { amount, remaining, timestamp: Clock::get()?.unix_timestamp });
-        msg!("🔄 Drained {} lamports to trade. Remaining: {} | On Drift: {} (epoch: {}/{})",
+        msg!("🔄 Drained {} to trade_wallet. Vault: {} | Drift: {} (epoch: {}/{})",
              amount, remaining, v.assets_on_drift, v.epoch_drained, effective_limit);
         Ok(())
     }
 
     /// Fund vault with SOL (return profits from Drift)
     /// C-1 FIX: credits total_assets back, reduces assets_on_drift
+    /// N-5 FIX: perf fee charged here on REALIZED profit only
     pub fn fund_vault(ctx: Context<FundCtx>, amount: u64) -> Result<()> {
         require!(amount > 0, VaultError::ZeroAmount);
 
@@ -408,14 +448,46 @@ pub mod chiller_vault {
             amount,
         )?;
 
-        // C-1 FIX: restore total_assets and reduce drift tracking
         let v = &mut ctx.accounts.vault;
-        v.total_assets = v.total_assets.checked_add(amount).ok_or(VaultError::MathOverflow)?;
+
+        // N-5 FIX: Calculate REALIZED profit
+        // Profit = amount returned - cost_basis consumed
+        // Cost basis is consumed proportionally: min(amount, cost_basis)
+        let cost_consumed = amount.min(v.drift_cost_basis);
+        let realized_profit = amount.saturating_sub(cost_consumed);
+
+        // Reduce cost basis by what was "returned"
+        v.drift_cost_basis = v.drift_cost_basis.saturating_sub(cost_consumed);
+
+        // Performance fee ONLY on realized profit AND only if above HWM
+        let mut pfee: u64 = 0;
+        let post_fund_effective = v.total_assets.saturating_add(amount).saturating_add(
+            v.assets_on_drift.saturating_sub(amount)
+        );
+        if realized_profit > 0 && v.performance_fee_bps > 0 && post_fund_effective > v.high_water_mark {
+            pfee = (realized_profit as u128 * v.performance_fee_bps as u128 / 10_000) as u64;
+            // Transfer perf fee: sol_vault → team_wallet
+            let sol_vault_info = ctx.accounts.sol_vault.to_account_info();
+            let rent_min = Rent::get()?.minimum_balance(8 + 1);
+            let available = sol_vault_info.lamports().checked_sub(rent_min).unwrap_or(0);
+            let actual_fee = pfee.min(available);
+            if actual_fee > 0 {
+                **sol_vault_info.try_borrow_mut_lamports()? -= actual_fee;
+                **ctx.accounts.team_wallet.try_borrow_mut_lamports()? += actual_fee;
+            }
+            pfee = actual_fee; // actual collected
+        }
+
+        // Credit total_assets (amount minus fee), reduce drift tracking
+        let net_funded = amount.saturating_sub(pfee);
+        v.total_assets = v.total_assets.checked_add(net_funded).ok_or(VaultError::MathOverflow)?;
         v.assets_on_drift = v.assets_on_drift.saturating_sub(amount);
 
         let new_balance = ctx.accounts.sol_vault.to_account_info().lamports();
+        if v.effective_assets() > v.high_water_mark { v.high_water_mark = v.effective_assets(); }
         emit!(VaultFunded { amount, new_balance, timestamp: Clock::get()?.unix_timestamp });
-        msg!("💰 Funded {} lamports. Balance: {} | Drift remaining: {}", amount, new_balance, v.assets_on_drift);
+        msg!("💰 Funded {} (profit: {}, fee: {}). Balance: {} | Drift: {} | Cost basis: {}", 
+             amount, realized_profit, pfee, new_balance, v.assets_on_drift, v.drift_cost_basis);
         Ok(())
     }
 
@@ -431,14 +503,19 @@ pub mod chiller_vault {
     }
 
     /// Emergency pause / unpause
-    /// H-4 FIX: records pause_timestamp for 24h auto-unpause
+    /// H-4 FIX: records pause_timestamp, can't re-pause within 24h
     pub fn set_paused(ctx: Context<SetPausedCtx>, paused: bool) -> Result<()> {
         let v = &mut ctx.accounts.vault;
+        let now = Clock::get()?.unix_timestamp;
+        // H-4 FIX: prevent re-pause within 24h (stops infinite freeze)
+        if paused && v.pause_timestamp > 0 {
+            require!(now - v.pause_timestamp >= 86400, VaultError::PauseCooldown);
+        }
         v.is_paused = paused;
         if paused {
-            v.pause_timestamp = Clock::get()?.unix_timestamp;
+            v.pause_timestamp = now;
         }
-        emit!(VaultPausedEvt { paused, authority: ctx.accounts.authority.key(), timestamp: Clock::get()?.unix_timestamp });
+        emit!(VaultPausedEvt { paused, authority: ctx.accounts.authority.key(), timestamp: now });
         Ok(())
     }
 
@@ -462,11 +539,12 @@ pub mod chiller_vault {
     }
 
     /// H-02: Update drain limit
-    /// H-2 FIX: capped at 30% of total_assets
+    /// H-2 FIX: capped at 30% of effective_assets
     pub fn set_drain_limit(ctx: Context<SetPausedCtx>, new_limit: u64) -> Result<()> {
         let v = &ctx.accounts.vault;
-        let max_allowed = v.total_assets * 30 / 100;
-        require!(new_limit <= max_allowed || v.total_assets == 0, VaultError::DrainLimitTooHigh);
+        let eff = v.effective_assets();
+        let max_allowed = eff * 30 / 100;
+        require!(new_limit <= max_allowed || eff == 0, VaultError::DrainLimitTooHigh);
         ctx.accounts.vault.drain_per_epoch = new_limit;
         msg!("🔧 Drain limit set to {} lamports/epoch (max: {})", new_limit, max_allowed);
         Ok(())
@@ -509,6 +587,15 @@ pub struct InitVault<'info> {
     pub sol_vault: Account<'info, SolTreasury>,
     /// CHECK: team wallet for fee collection
     pub team_wallet: AccountInfo<'info>,
+    /// CHECK: C-1: whitelisted trade wallet for drain destination
+    pub trade_wallet: AccountInfo<'info>,
+    /// CHECK: H-1: program data account to verify deployer == authority
+    #[account(
+        seeds = [crate::ID.as_ref()],
+        bump,
+        seeds::program = bpf_loader_upgradeable::id(),
+    )]
+    pub program_data: AccountInfo<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -551,12 +638,9 @@ pub struct UpdateNAVCtx<'info> {
     #[account(mut)] pub authority: Signer<'info>,
     #[account(mut, seeds = [b"vault"], bump = vault.bump, has_one = authority @ VaultError::Unauthorized)]
     pub vault: Account<'info, VaultState>,
-    /// CHECK: SOL treasury (program-owned)
-    #[account(mut, seeds = [b"sol-vault"], bump = vault.sol_vault_bump)]
+    /// CHECK: SOL treasury (program-owned) — needed for real_balance ceiling check
+    #[account(seeds = [b"sol-vault"], bump = vault.sol_vault_bump)]
     pub sol_vault: AccountInfo<'info>,
-    /// CHECK: team wallet for perf fee
-    #[account(mut, address = vault.team_wallet)]
-    pub team_wallet: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
@@ -567,16 +651,22 @@ pub struct DrainCtx<'info> {
     /// CHECK: SOL treasury (program-owned)
     #[account(mut, seeds = [b"sol-vault"], bump = vault.sol_vault_bump)]
     pub sol_vault: AccountInfo<'info>,
+    /// CHECK: C-1: must match vault.trade_wallet
+    #[account(mut, address = vault.trade_wallet @ VaultError::InvalidTradeWallet)]
+    pub trade_wallet: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
 pub struct FundCtx<'info> {
     #[account(mut)] pub authority: Signer<'info>,
-    #[account(seeds = [b"vault"], bump = vault.bump, has_one = authority @ VaultError::Unauthorized)]
+    #[account(mut, seeds = [b"vault"], bump = vault.bump, has_one = authority @ VaultError::Unauthorized)]
     pub vault: Account<'info, VaultState>,
     /// CHECK: SOL treasury (program-owned)
     #[account(mut, seeds = [b"sol-vault"], bump = vault.sol_vault_bump)]
     pub sol_vault: AccountInfo<'info>,
+    /// CHECK: N-5: team wallet for realized perf fee
+    #[account(mut, address = vault.team_wallet)]
+    pub team_wallet: AccountInfo<'info>,
     pub system_program: Program<'info, System>,
 }
 

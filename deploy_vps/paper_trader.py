@@ -1036,6 +1036,8 @@ def run_paper_trader(symbols: List[str], deposit: float, interval: int, max_pos:
             state.wins = prev.get("wins", 0); state.losses = prev.get("losses", 0)
             state.total_pnl_pct = prev.get("total_pnl_pct", 0.0); state.signals_seen = prev.get("signals_seen", 0)
             state.completed_trades = prev.get("completed_trades", [])
+            # Restore paper trading balance if available (v10.1)
+            state.exchange_balance = prev.get("exchange_balance", deposit)
             # Restore active positions from saved state
             saved_positions = prev.get("active_positions", {})
             for sym, pos_data in saved_positions.items():
@@ -1435,6 +1437,11 @@ def run_paper_trader(symbols: List[str], deposit: float, interval: int, max_pos:
                             pos.realized_pnl_pct = 0.0
                             save_state(state, state_path)
                             continue  # ← Skip trade recording, keep position alive
+                    else:
+                        # Paper trading mode: calculate dollar PnL and update balance (v10.1)
+                        pnl_usdt = pos.size_usdt * (pos.realized_pnl_pct / 100.0)
+                        state.exchange_balance += pnl_usdt
+                        logger.info(f"💵 [PAPER] Realized PnL: ${pnl_usdt:+.2f} | Updated Balance: ${state.exchange_balance:,.2f}")
                     # ───────────────────────────────────────────
 
                     # v6.0: Record trade outcome to IIE for ML learning

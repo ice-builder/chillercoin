@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>$CHILLER Dashboard — Vault Management</title>
+    <meta name="description" content="Manage your $CHILLER vault: deposit SOL, withdraw, track AI trading performance in real-time.">
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧊</text></svg>">
+</head>
+<body>
+
+<!-- Sidebar -->
+<aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+        <img src="logo.png" alt="$CHILLER" class="logo-img">
+        <h1>CHILLER</h1>
+        <span class="version">v2</span>
+    </div>
+
+    <nav class="sidebar-nav">
+        <a class="nav-item active" data-page="overview" onclick="showPage('overview')">
+            <span class="nav-icon">📊</span> Overview
+        </a>
+        <a class="nav-item" data-page="trades" onclick="showPage('trades')">
+            <span class="nav-icon">📈</span> Trades
+        </a>
+        <a class="nav-item" data-page="vault" onclick="showPage('vault')">
+            <span class="nav-icon">🏦</span> Vault
+        </a>
+
+        <div class="nav-divider"></div>
+
+        <a class="nav-item" href="https://chillercoin.io" target="_blank">
+            <span class="nav-icon">🌐</span> Website
+        </a>
+        <a class="nav-item" href="#" target="_blank">
+            <span class="nav-icon">💬</span> Telegram
+        </a>
+        <a class="nav-item" href="#" target="_blank">
+            <span class="nav-icon">📄</span> Docs
+        </a>
+    </nav>
+
+    <div class="sidebar-footer">
+        <div class="vault-status">
+            <span class="pulse"></span>
+            <span>Vault Active — Drift Protocol</span>
+        </div>
+    </div>
+</aside>
+
+<!-- Main Content -->
+<main class="main">
+
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <h2 id="page-title">Overview</h2>
+        </div>
+        <div class="header-right">
+            <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                <span id="theme-icon">☀️</span>
+            </button>
+            <span class="network-badge" id="network-badge">Devnet</span>
+            <button class="connect-btn" id="connect-btn" onclick="connectWallet()">
+                🔗 Connect Wallet
+            </button>
+        </div>
+    </header>
+
+    <div class="content">
+        <!-- PAGE: Overview -->
+        <div class="page active" id="page-overview">
+
+            <!-- Stats Grid -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">🏦 Vault TVL</div>
+                    <div class="stat-value accent" id="stat-tvl">0.00 SOL</div>
+                    <div class="stat-change up" id="stat-tvl-change">↑ +0.00%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">💎 NAV / $CHILLER</div>
+                    <div class="stat-value" id="stat-nav">0.0100 SOL</div>
+                    <div class="stat-change up" id="stat-nav-change">↑ +0.00%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">📊 Total Trades</div>
+                    <div class="stat-value" id="stat-trades">0</div>
+                    <div class="stat-change up" id="stat-winrate">Win: 0%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">🧊 Your Balance</div>
+                    <div class="stat-value accent" id="stat-balance">—</div>
+                    <div class="stat-change" id="stat-balance-sol" style="color: var(--text-secondary)">Connect wallet</div>
+                </div>
+            </div>
+
+            <!-- Chart + Actions -->
+            <div class="cards-row">
+                <!-- NAV Chart -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>📈 NAV Performance</h3>
+                        <div class="chart-period-tabs">
+                            <button class="period-tab" onclick="setChartPeriod('1D')">1D</button>
+                            <button class="period-tab active" onclick="setChartPeriod('1W')">1W</button>
+                            <button class="period-tab" onclick="setChartPeriod('1M')">1M</button>
+                            <button class="period-tab" onclick="setChartPeriod('ALL')">ALL</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="nav-chart" class="chart-canvas"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Deposit / Withdraw -->
+                <div class="card">
+                    <div class="action-tabs">
+                        <button class="action-tab active" id="tab-deposit" onclick="switchAction('deposit')">Deposit</button>
+                        <button class="action-tab" id="tab-withdraw" onclick="switchAction('withdraw')">Withdraw</button>
+                    </div>
+
+                    <!-- Deposit Form -->
+                    <div class="action-form" id="form-deposit">
+                        <div class="input-group">
+                            <div class="input-label">
+                                <span>Amount</span>
+                                <span class="balance-hint" onclick="setMaxDeposit()">Balance: <span id="user-sol-bal">0.00</span> SOL</span>
+                            </div>
+                            <div class="input-wrap">
+                                <input type="number" id="deposit-amount" placeholder="0.00" step="0.01" min="0.5" oninput="updateDepositPreview()">
+                                <div class="input-suffix">
+                                    <button class="max-btn" onclick="setMaxDeposit()">MAX</button>
+                                    SOL
+                                </div>
+                            </div>
+                        </div>
+                        <div class="conversion-row">
+                            <span>You receive</span>
+                            <span id="deposit-receive">0 $CHILLER</span>
+                        </div>
+                        <div class="conversion-row">
+                            <span>NAV price</span>
+                            <span id="deposit-nav">0.0100 SOL</span>
+                        </div>
+                        <div class="conversion-row">
+                            <span>Min deposit</span>
+                            <span>0.5 SOL</span>
+                        </div>
+                        <button class="submit-btn deposit" id="btn-deposit" onclick="executeDeposit()" disabled>
+                            Connect Wallet
+                        </button>
+                    </div>
+
+                    <!-- Withdraw Form -->
+                    <div class="action-form" id="form-withdraw" style="display:none">
+                        <div class="input-group">
+                            <div class="input-label">
+                                <span>Amount</span>
+                                <span class="balance-hint" onclick="setMaxWithdraw()">Balance: <span id="user-chiller-bal">0</span> $CHILLER</span>
+                            </div>
+                            <div class="input-wrap">
+                                <input type="number" id="withdraw-amount" placeholder="0" step="1" min="1" oninput="updateWithdrawPreview()">
+                                <div class="input-suffix">
+                                    <button class="max-btn" onclick="setMaxWithdraw()">MAX</button>
+                                    $CHILLER
+                                </div>
+                            </div>
+                        </div>
+                        <div class="conversion-row">
+                            <span>You receive</span>
+                            <span id="withdraw-receive">0 SOL</span>
+                        </div>
+                        <div class="conversion-row">
+                            <span>Withdrawal fee</span>
+                            <span>0.5%</span>
+                        </div>
+                        <button class="submit-btn withdraw" id="btn-withdraw" onclick="executeWithdraw()" disabled>
+                            Connect Wallet
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Trades -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>🔥 Recent Trades</h3>
+                    <a class="nav-item" onclick="showPage('trades')" style="padding:4px 8px;font-size:12px;cursor:pointer;">View All →</a>
+                </div>
+                <div class="card-body" style="padding:0">
+                    <table class="trades-table" id="recent-trades-table">
+                        <thead>
+                            <tr>
+                                <th>Pair</th>
+                                <th>Side</th>
+                                <th>P&L</th>
+                                <th>Duration</th>
+                                <th>Time</th>
+                                <th>TX</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recent-trades-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- PAGE: Trades -->
+        <div class="page" id="page-trades">
+            <div class="stats-grid" style="grid-template-columns: repeat(3, 1fr);">
+                <div class="stat-card">
+                    <div class="stat-label">Total Trades</div>
+                    <div class="stat-value" id="trades-total">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Win Rate</div>
+                    <div class="stat-value profit" id="trades-winrate">0%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Cumulative P&L</div>
+                    <div class="stat-value profit" id="trades-pnl">+0.00%</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>📋 All Trades (On-Chain Verified)</h3>
+                </div>
+                <div class="card-body" style="padding:0">
+                    <table class="trades-table">
+                        <thead>
+                            <tr>
+                                <th>Pair</th>
+                                <th>Side</th>
+                                <th>Entry</th>
+                                <th>Exit</th>
+                                <th>P&L</th>
+                                <th>Duration</th>
+                                <th>NAV After</th>
+                                <th>Time</th>
+                                <th>TX</th>
+                            </tr>
+                        </thead>
+                        <tbody id="all-trades-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- PAGE: Vault -->
+        <div class="page" id="page-vault">
+            <div class="stats-grid" style="grid-template-columns: repeat(3, 1fr);">
+                <div class="stat-card">
+                    <div class="stat-label">Total Assets</div>
+                    <div class="stat-value accent" id="vault-assets">0 SOL</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Token Supply</div>
+                    <div class="stat-value" id="vault-supply">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">High Water Mark</div>
+                    <div class="stat-value" id="vault-hwm">0 SOL</div>
+                </div>
+            </div>
+
+            <div class="cards-row">
+                <div class="card">
+                    <div class="card-header"><h3>⚙️ Vault Configuration</h3></div>
+                    <div class="card-body">
+                        <div class="portfolio-breakdown" id="vault-config"></div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header"><h3>💼 Your Portfolio</h3></div>
+                    <div class="card-body">
+                        <div class="portfolio-breakdown">
+                            <div class="portfolio-item">
+                                <div class="portfolio-item-left">
+                                    <div class="portfolio-icon chiller">🧊</div>
+                                    <div>
+                                        <div class="portfolio-name">$CHILLER</div>
+                                        <div class="portfolio-sub">Vault Token</div>
+                                    </div>
+                                </div>
+                                <div class="portfolio-value">
+                                    <div class="portfolio-amount" id="port-chiller">0</div>
+                                    <div class="portfolio-usd" id="port-chiller-val">≈ 0 SOL</div>
+                                </div>
+                            </div>
+                            <div class="portfolio-item">
+                                <div class="portfolio-item-left">
+                                    <div class="portfolio-icon sol">◎</div>
+                                    <div>
+                                        <div class="portfolio-name">SOL</div>
+                                        <div class="portfolio-sub">Solana</div>
+                                    </div>
+                                </div>
+                                <div class="portfolio-value">
+                                    <div class="portfolio-amount" id="port-sol">0.00</div>
+                                    <div class="portfolio-usd" id="port-sol-val">Available</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</main>
+
+<!-- Wallet Selection Modal -->
+<div class="wallet-modal-overlay" id="wallet-modal" onclick="closeWalletModal(event)">
+    <div class="wallet-modal">
+        <div class="wallet-modal-header">
+            <h3>Connect Wallet</h3>
+            <button class="wallet-modal-close" onclick="closeWalletModal()">&times;</button>
+        </div>
+        <div class="wallet-modal-body">
+            <button class="wallet-option" onclick="connectSpecificWallet('phantom')">
+                <div class="wallet-option-left">
+                    <div class="wallet-icon phantom">
+                        <svg width="28" height="28" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <rect width="128" height="128" rx="26" fill="#AB9FF2"/>
+                            <path d="M110.584 64.916H99.142C99.142 41.086 79.856 21.8 56.026 21.8C32.728 21.8 13.764 40.296 13 63.394C12.218 87.15 31.244 107.8 55.002 107.8H59.87C80.654 107.8 101.266 95.258 109.584 76.02C110.52 73.858 110.584 72.564 110.584 64.916Z" fill="url(#phantom_grad)"/>
+                            <circle cx="42.5" cy="58.5" r="7.5" fill="white"/>
+                            <circle cx="69.5" cy="58.5" r="7.5" fill="white"/>
+                            <defs><linearGradient id="phantom_grad" x1="13" y1="21.8" x2="110.584" y2="107.8" gradientUnits="userSpaceOnUse"><stop stop-color="#534BB1"/><stop offset="1" stop-color="#551BF9"/></linearGradient></defs>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="wallet-option-name">Phantom</div>
+                        <div class="wallet-option-desc">Most popular Solana wallet</div>
+                    </div>
+                </div>
+                <span class="wallet-detect" id="detect-phantom">—</span>
+            </button>
+            <button class="wallet-option" onclick="connectSpecificWallet('solflare')">
+                <div class="wallet-option-left">
+                    <div class="wallet-icon solflare">
+                        <svg width="28" height="28" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <rect width="128" height="128" rx="26" fill="#FC8E22"/>
+                            <path d="M64 28L72.5 48.5L94 38L82 58.5L104 64L82 69.5L94 90L72.5 79.5L64 100L55.5 79.5L34 90L46 69.5L24 64L46 58.5L34 38L55.5 48.5L64 28Z" fill="white"/>
+                            <circle cx="64" cy="64" r="14" fill="#FC8E22"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="wallet-option-name">Solflare</div>
+                        <div class="wallet-option-desc">Advanced Solana wallet</div>
+                    </div>
+                </div>
+                <span class="wallet-detect" id="detect-solflare">—</span>
+            </button>
+            <button class="wallet-option" onclick="connectSpecificWallet('backpack')">
+                <div class="wallet-option-left">
+                    <div class="wallet-icon backpack">
+                        <svg width="28" height="28" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <rect width="128" height="128" rx="26" fill="#E33E3F"/>
+                            <path d="M52 36C52 29.373 57.373 24 64 24C70.627 24 76 29.373 76 36V42H52V36Z" stroke="white" stroke-width="5" fill="none"/>
+                            <rect x="36" y="42" width="56" height="56" rx="10" fill="white"/>
+                            <rect x="48" y="66" width="32" height="12" rx="4" fill="#E33E3F"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="wallet-option-name">Backpack</div>
+                        <div class="wallet-option-desc">xNFT compatible wallet</div>
+                    </div>
+                </div>
+                <span class="wallet-detect" id="detect-backpack">—</span>
+            </button>
+            <div class="wallet-divider"></div>
+            <button class="wallet-option demo" onclick="connectSpecificWallet('demo')">
+                <div class="wallet-option-left">
+                    <div class="wallet-icon demo-icon">🧊</div>
+                    <div>
+                        <div class="wallet-option-name">Demo Mode</div>
+                        <div class="wallet-option-desc">Try without a wallet</div>
+                    </div>
+                </div>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Toast notification -->
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

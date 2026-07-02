@@ -15,13 +15,17 @@ try:
 except ImportError:
     req = None
 try:
-    from insider_pages import page_insider, page_insider_signals, page_insider_trade, page_insider_position
+    from insider_pages import page_insider, page_insider_signals, page_insider_trade, page_insider_position, page_insider_feed
 except ImportError:
-    page_insider = page_insider_signals = page_insider_trade = page_insider_position = None
+    page_insider = page_insider_signals = page_insider_trade = page_insider_position = page_insider_feed = None
 try:
     from iie_pages import page_iie, page_iie_impulses, page_iie_coins, page_iie_config, handle_iie_config_update
 except ImportError:
     page_iie = page_iie_impulses = page_iie_coins = page_iie_config = handle_iie_config_update = None
+try:
+    from lhb_pages import page_liquidation_hunter, LHBAdapter, is_lhb_online
+except ImportError:
+    page_liquidation_hunter = LHBAdapter = is_lhb_online = None
 
 PORT = int(os.getenv("MONITOR_PORT", "8585"))
 SD = Path(__file__).parent / ".local_ai" / "paper_trading"
@@ -38,6 +42,7 @@ else:
 INSIDER_OI_HISTORY = INSIDER_DIR / "oi_history.json"
 INSIDER_STATE = INSIDER_DIR / "insider_positions.json"
 INSIDER_TRADES = INSIDER_DIR / "insider_trades.json"
+INSIDER_TG_MESSAGES = INSIDER_DIR / "tg_messages.json"
 
 # ─── Exchange Executor (for real balance display) ────────────
 TRADING_MODE = os.getenv("TRADING_MODE", "paper").lower()
@@ -206,6 +211,62 @@ def insider_state():
     """Read insider scanner state file."""
     return rj(INSIDER_STATE)
 
+def _insider_tg_mini() -> str:
+    """Mini TG feed for the Insider card on HQ home page. Shows last 3 alerts."""
+    try:
+        if not INSIDER_TG_MESSAGES.exists():
+            return ''
+        msgs = json.loads(INSIDER_TG_MESSAGES.read_text(encoding="utf-8"))
+        if not isinstance(msgs, list):
+            return ''
+    except Exception:
+        return ''
+
+    # Get messages with parsed alerts (most recent first)
+    with_alerts = [m for m in reversed(msgs) if m.get("parsed_alerts")]
+    if not with_alerts:
+        return ''
+
+    rows = ""
+    for m in with_alerts[:3]:
+        ch = m.get("channel", "?")
+        alerts = m.get("parsed_alerts", [])
+        ts = m.get("fetched_at", 0)
+
+        # Time ago
+        diff = time.time() - float(ts) if ts else 0
+        if diff < 60:
+            ago = f"{diff:.0f}s"
+        elif diff < 3600:
+            ago = f"{diff/60:.0f}m"
+        elif diff < 86400:
+            ago = f"{diff/3600:.0f}h"
+        else:
+            ago = f"{diff/86400:.0f}d"
+
+        # Build alert summary
+        parts = []
+        for a in alerts[:2]:
+            if a.get("type") == "oi":
+                parts.append(f'{a.get("symbol","?")} OI {a.get("change",0):+.0f}%')
+            elif a.get("type") == "flow":
+                amt = a.get("amount_usdt", 0)
+                amt_s = f"${amt/1e6:.1f}M" if amt >= 1e6 else f"${amt/1e3:.0f}K"
+                d = "\U0001f7e2" if a.get("direction") == "buy" else "\U0001f534"
+                parts.append(f'{d} {a.get("symbol","?")} {amt_s}')
+        alert_text = " · ".join(parts)
+
+        ch_short = ch[:10]
+        rows += f'<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:11px"><span style="color:var(--accent)">{alert_text}</span><span style="color:var(--dim)">{ago}</span></div>'
+
+    return f'''<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px" onclick="event.stopPropagation();window.location='/insider/feed'">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+    <span style="font-size:11px;font-weight:600;color:var(--dim)">\U0001f4f0 TG Feed</span>
+    <a href="/insider/feed" class="hist-btn" style="font-size:10px;padding:3px 8px" onclick="event.stopPropagation()">\U0001f4e1 Open Feed</a>
+    </div>
+    {rows}
+    </div>'''
+
 # ─── CSS ───# ─── Scalper Pages ──────────────────────────────────
 CSS = """
 *{margin:0;padding:0;box-sizing:border-box}
@@ -304,16 +365,14 @@ def nav(active):
     links += section("\U0001f575\ufe0f Insider Scanner")
     links += item("/insider", "\U0001f4ca", "Dashboard")
     links += item("/insider/signals", "\U0001f4e1", "Live Signals", True)
-    links += section("\U0001f9e0 IIE Engine")
-    links += item("/iie", "\U0001f4ca", "Overview")
-    links += item("/iie/impulses", "\u26a1", "Impulses", True)
-    links += item("/iie/coins", "\U0001fa99", "Coin Profiles", True)
-    links += item("/iie/config", "\u2699\ufe0f", "Config", True)
-    links += section("\U0001f4b9 Exchange")
-    links += item("/exchange", "\U0001f4ca", "Dashboard")
-    links += item("/exchange/positions", "\U0001f4cd", "Positions", True)
-    links += item("/exchange/history", "\U0001f4dc", "Trade History", True)
-    links += item("/exchange/equity", "\U0001f4c8", "PnL Curve", True)
+    links += item("/insider/feed", "\U0001f4f0", "TG Feed", True)
+    links += section("💵 Exchange")
+    links += item("/exchange", "📊", "Dashboard")
+    links += item("/exchange/positions", "📍", "Positions", True)
+    links += item("/exchange/history", "📜", "Trade History", True)
+    links += item("/exchange/equity", "📈", "PnL Curve", True)
+    links += section("💥 Liquidation Hunter")
+    links += item("/liquidation_hunter", "📊", "Dashboard")
     return f'<div class="sidebar"><div class="logo">\U0001f3af HQ Command</div>{links}<div style="flex:1"></div><div style="padding:12px 20px;font-size:11px;color:var(--dim)">Auto-refresh: 60s</div></div>'
 
 
@@ -326,65 +385,85 @@ def layout(title, body, active="/"):
 def pnl_cls(v): return "pos" if v >= 0 else "neg"
 def pnl_badge(v): return f'<span class="badge {"badge-green" if v>0 else "badge-red"}">{v:+.3f}%</span>'
 
-# ─── Pages ─# ─── Scalper Pages ──────────────────────────────────
-
 def page_home():
-    """Combined HQ Overview showing both bots."""
+    """Combined HQ Overview showing all bots."""
     s = state()
-    # Recalculate wins/losses from actual trades (counters in state may be stale)
     s_trades = [t for t in s.get("completed_trades", []) if t.get("strategy_name") != "exchange_sync" and t.get("config_version") != "sync"]
     sw = sum(1 for t in s_trades if t.get("realized_pnl_pct", 0) > 0)
     sl = len(s_trades) - sw
     s_tot = sw+sl; s_wr = sw/max(1,s_tot)*100
-    # v10: Soldier PnL = sum of actual trade PnLs (no fake deposit)
     s_pnl = sum(t.get('realized_pnl_pct', 0) for t in s_trades)
     s_active = s.get("active_positions", {})
     ks = kill_active()
-
-    # Soldier balance = exchange balance (single source of truth)
     exchange_balance = ex_balance() if _executor else 0.0
     s_balance = exchange_balance if exchange_balance > 0 else s.get('exchange_balance', 0)
-
     ph = ph_state()
-    # Recalculate PnL from actual completed trades (not stale total_pnl_pct)
     p_pnl = sum(t.get('pnl_pct', 0) for t in ph.get('completed_trades', [])) if ph else 0
     p_wins = ph.get("wins", 0) if ph else 0
     p_losses = ph.get("losses", 0) if ph else 0
     p_tot = p_wins + p_losses
     p_wr = p_wins / max(1, p_tot) * 100
-    p_deposit = 10000  # Initial deposit
+    p_deposit = 10000
     p_balance = ph.get("demo_balance", 10000) if ph else 10000
     p_active = ph.get("active_positions", {}) if ph else {}
 
-    # Total portfolio = exchange balance (single account for Soldier)
-    # Pump Hunter has its own paper balance
-    total_balance = exchange_balance if exchange_balance > 0 else s_balance
-    # Combined PnL from exchange
-    c_bal_cls = '' if s_balance > 0 else ' neg-balance'
-    s_bal_cls = '' if s_pnl >= 0 else ' neg-balance'
-    p_bal_cls = '' if p_pnl >= 0 else ' neg-balance'
+    # Fetch LHB data
+    lhb_balance = 10000.0
+    lhb_net_pnl = 0.0
+    lhb_net_pnl_pct = 0.0
+    lhb_wr = 0.0
+    lhb_trades = 0
+    lhb_active_count = 0
+    lhb_status = '<span class="badge" style="background:rgba(248,81,73,.15);color:var(--red)">\u23f3 OFFLINE</span>'
+    lhb_pos_rows = '<tr><td colspan="3" style="color:var(--dim)">Daemon hunting...</td></tr>'
+    sc = 'var(--dim)'
+    global_stress_level = "INFO"
+    if LHBAdapter and is_lhb_online:
+        try:
+            lhb_health = LHBAdapter.get_health()
+            lhb_status_label, lhb_status = is_lhb_online(lhb_health)
+            if lhb_status_label != "OFFLINE":
+                lhb_paper = LHBAdapter.get_paper()
+                if lhb_paper:
+                    lhb_acc = lhb_paper.get("account_summary", {})
+                    lhb_balance = lhb_acc.get("equity_usdt", 10000.0)
+                    lhb_net_pnl = lhb_acc.get("net_pnl_usdt", 0.0)
+                    lhb_net_pnl_pct = lhb_acc.get("net_pnl_pct", 0.0)
+                    lhb_wr = lhb_acc.get("win_rate", 0.0)
+                    lhb_trades = lhb_acc.get("trades_today", 0)
+                    open_pos = lhb_paper.get("open_positions", [])
+                    lhb_active_count = len(open_pos)
+                    if open_pos:
+                        lhb_pos_rows = ""
+                        for p in open_pos[:3]:
+                            sym = p.get("symbol", "?")
+                            side_badge = f'<span class="badge badge-green">BUY</span>' if p.get("side") == "buy" else f'<span class="badge badge-red">SELL</span>'
+                            pnl_val = p.get("net_pnl_usdt", 0.0)
+                            pnl_pct = p.get("net_pnl_pct", 0.0)
+                            cls = "pos" if pnl_val >= 0 else "neg"
+                            lhb_pos_rows += f'<tr><td><strong>{sym}</strong></td><td>{side_badge}</td><td class="{cls}" style="font-weight:700">{pnl_pct:+.2f}%</td></tr>'
+                lhb_stress = LHBAdapter.get_stress()
+                if lhb_stress:
+                    global_stress_level = lhb_stress.get("global_level", "INFO")
+                    stress_colors = {"NO_TRADE":"var(--dim)","INFO":"var(--blue)","LOW":"var(--green)","MODERATE":"var(--orange)","HIGH":"var(--red)","EXTREME":"var(--purple)"}
+                    sc = stress_colors.get(global_stress_level, "var(--dim)")
+        except Exception: pass
 
-    # Trading mode badges (per-bot)
-    mode_badges = {
-        'paper': '<span class="badge" style="background:rgba(139,148,158,.15);color:var(--dim)">📝 PAPER</span>',
-        'demo': '<span class="badge badge-purple">🧪 DEMO</span>',
-        'live': '<span class="badge badge-red">🔴 LIVE</span>',
-    }
-    s_mode = TRADING_MODE
-    p_mode = ph.get("trading_mode", "paper") if ph else "paper"
-    s_mode_badge = mode_badges.get(s_mode, mode_badges['paper'])
-    p_mode_badge = mode_badges.get(p_mode, mode_badges['paper'])
+    # Fetch Insider Scanner data
+    ins = insider_state()
+    ins_balance = ins.get("balance", 10000) if ins else 10000
+    ins_deposit = 10000
+    ins_pnl_pct = (ins_balance / ins_deposit - 1) * 100 if ins_deposit else 0
+    ins_active = ins.get("active_positions", {}) if ins else {}
 
-    # Combined mode
-    combined_mode = 'live' if 'live' in (s_mode, p_mode) else ('demo' if 'demo' in (s_mode, p_mode) else 'paper')
-    combined_badge = mode_badges.get(combined_mode, mode_badges['paper'])
+    # Combined / Total balance (Soldier + Pump Hunter + Insider + LHB)
+    total_balance = (exchange_balance if exchange_balance > 0 else s_balance) + p_balance + ins_balance + lhb_balance
 
-    # Info line
-    ex_line = f' | Binance Testnet: ${exchange_balance:,.2f}' if exchange_balance > 0 else ''
     sol_pnl_line = f'Soldier: {s_pnl:+.2f}%'
     pump_pnl_line = f'Pump: {p_pnl:+.1f}%'
+    ins_pnl_line = f'Insider: {ins_pnl_pct:+.1f}%'
+    lhb_pnl_line = f'LiqHunter: {lhb_net_pnl_pct:+.2f}%'
 
-    # Mini equity sparkline from income history
     mini_spark = ''
     if _executor:
         try:
@@ -409,27 +488,42 @@ def page_home():
         except Exception:
             pass
 
-    # Fetch exchange open positions for overview
     ex_pos_list = ex_positions()
     ex_upnl = sum(p.unrealized_pnl for p in ex_pos_list)
     ex_pos_count = len(ex_pos_list)
     ex_upnl_c = 'var(--green)' if ex_upnl >= 0 else 'var(--red)'
-    ex_pos_info = f'<span style="display:block;font-size:13px;margin-top:6px;color:{ex_upnl_c};font-weight:600">\U0001f4cd {ex_pos_count} open positions · uPnL: ${ex_upnl:+,.2f}</span>' if ex_pos_count > 0 else ''
+    ex_pos_info = f'<span style="display:block;font-size:13px;margin-top:6px;color:{ex_upnl_c};font-weight:600">📍 {ex_pos_count} open positions · uPnL: ${ex_upnl:+,.2f}</span>' if ex_pos_count > 0 else ''
+
+    mode_badges = {
+        'paper': '<span class="badge" style="background:rgba(139,148,158,.15);color:var(--dim)">📝 PAPER</span>',
+        'demo': '<span class="badge badge-purple">🧪 DEMO</span>',
+        'live': '<span class="badge badge-red">🔴 LIVE</span>',
+    }
+    s_mode = TRADING_MODE
+    p_mode = ph.get("trading_mode", "paper") if ph else "paper"
+    s_mode_badge = mode_badges.get(s_mode, mode_badges['paper'])
+    p_mode_badge = mode_badges.get(p_mode, mode_badges['paper'])
+
+    combined_mode = 'live' if 'live' in (s_mode, p_mode) else ('demo' if 'demo' in (s_mode, p_mode) else 'paper')
+    combined_badge = mode_badges.get(combined_mode, mode_badges['paper'])
+
+    ex_line = f' | Binance Testnet: ${exchange_balance:,.2f}' if exchange_balance > 0 else ''
+
+    c_bal_cls = '' if total_balance >= 0 else ' neg-balance'
 
     combined = f'''<div class="grid" style="grid-template-columns:1fr">
     <div class="card metric balance-card{c_bal_cls}" style="padding:28px">
-    <span class="label">\U0001f4b0 Total Portfolio {combined_badge}</span>
+    <span class="label">💵 Total Portfolio {combined_badge}</span>
     <span class="value" style="font-size:36px">${total_balance:,.2f}</span>{mini_spark}
-    <span style="display:block;font-size:12px;color:var(--dim);margin-top:6px">{sol_pnl_line} · {pump_pnl_line}{ex_line}</span>
+    <span style="display:block;font-size:12px;color:var(--dim);margin-top:6px">{sol_pnl_line} · {pump_pnl_line} · {ins_pnl_line} · {lhb_pnl_line}{ex_line}</span>
     {ex_pos_info}
     <div style="margin-top:12px;display:flex;gap:8px;justify-content:center">
-    <a href="/exchange/positions" class="hist-btn">\U0001f4cd Позиции ({ex_pos_count})</a>
-    <a href="/exchange/history" class="hist-btn">\U0001f4dc История сделок</a>
-    <a href="/exchange/equity" class="hist-btn">\U0001f4c8 Кривая PnL</a>
+    <a href="/exchange/positions" class="hist-btn">📍 Позиции ({ex_pos_count})</a>
+    <a href="/exchange/history" class="hist-btn">📜 История сделок</a>
+    <a href="/exchange/equity" class="hist-btn">📈 Кривая PnL</a>
     </div>
     </div></div>'''
 
-    # Soldier positions
     s_status = '<span class="badge badge-red">\U0001f6d1 STOP</span>' if ks else '<span class="badge badge-green">\U0001f7e2 LIVE</span>'
     s_pos_rows = ""
     s_upnl = 0.0
@@ -445,25 +539,17 @@ def page_home():
         cls = "pos" if upnl >= 0 else "neg"
         usd_str = f' <span style="font-size:12px">(${upnl_d:+,.1f})</span>' if size_u else ''
         s_pos_rows += f'<tr><td><strong>{sym}</strong></td><td>{di} {p.get("direction","?").upper()}</td><td class="{cls}" style="font-weight:700">{upnl:+.2f}%{usd_str}</td></tr>'
-    if not s_pos_rows:
-        s_pos_rows = '<tr><td colspan="3" style="color:var(--dim)">No open positions</td></tr>'
+    if not s_pos_rows: s_pos_rows = '<tr><td colspan="3" style="color:var(--dim)">No open positions</td></tr>'
     s_upnl_cls = "pos" if s_upnl >= 0 else "neg"
     s_usd_info = f' (${s_upnl_usd:+,.1f})' if s_upnl_usd != 0 else ''
-
     soldier = f'''<div class="card" style="cursor:pointer" onclick="window.location='/scalper'">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-    <h3>\u2694\ufe0f Soldier (Impulse Scalper)</h3><div>{s_mode_badge} {s_status}</div>
-    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><h3>\u2694\ufe0f Soldier</h3><div>{s_status}</div></div>
     <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
     <div class="card metric" style="padding:12px" onclick="event.stopPropagation();window.location='/scalper/trades'"><span class="label">📈 PnL</span><span class="value {pnl_cls(s_pnl)}" style="font-size:20px">{s_pnl:+.2f}%</span></div>
     <div class="card metric" style="padding:12px"><span class="label">Win Rate</span><span class="value" style="font-size:20px">{s_wr:.0f}%</span></div>
-    <div class="card metric" style="padding:12px"><span class="label">Trades</span><span class="value" style="font-size:20px">{s_tot} <small style="color:var(--dim)">W{sw}/L{sl}</small></span></div>
-    </div>
-    <table><thead><tr><th>Symbol</th><th>Direction</th><th>uPnL</th></tr></thead><tbody>{s_pos_rows}</tbody></table>
-    <p style="margin-top:8px;font-size:12px;color:var(--dim)">Active: {len(s_active)}/5 \u00b7 <span class="{s_upnl_cls}">uPnL: {s_upnl:+.2f}%{s_usd_info}</span> \u00b7 Click for details \u2192</p>
-    </div>'''
-
-    # Pump Hunter positions
+    <div class="card metric" style="padding:12px"><span class="label">Trades</span><span class="value" style="font-size:20px">{s_tot}</span></div>
+    </div><table><thead><tr><th>Symbol</th><th>Dir</th><th>uPnL</th></tr></thead><tbody>{s_pos_rows}</tbody></table>
+    <p style="margin-top:8px;font-size:12px;color:var(--dim)">Active: {len(s_active)}/5 \u00b7 <span class="{s_upnl_cls}">uPnL: {s_upnl:+.2f}%{s_usd_info}</span> \u00b7 Click for details \u2192</p></div>'''
     p_pos_rows = ""
     p_upnl = 0.0
     p_upnl_usd = 0.0
@@ -478,7 +564,6 @@ def page_home():
             upnl = ((cur / entry) - 1) * 100 if entry > 0 and cur > 0 else p.get("pnl_pct", 0)
         else:
             upnl = ((entry / cur) - 1) * 100 if entry > 0 and cur > 0 else p.get("pnl_pct", 0)
-        # Calculate position notional and dollar uPnL
         lev = float(p.get("leverage", 20))
         size_u = float(p.get("size_usdt", 0) or 0)
         if size_u == 0:
@@ -491,66 +576,32 @@ def page_home():
         cls = "pos" if upnl >= 0 else "neg"
         pump = p.get("pump_pct", 0)
         usd_str = f' <span style="font-size:11px">(${upnl_d:+,.0f})</span>' if upnl_d != 0 else ''
-        ver_badge = (
-            f'<span class="badge" style="background:rgba(63,185,80,.15);color:var(--green)">{strat_ver.upper()}</span>' if strat_ver == 'v3'
-            else f'<span class="badge badge-purple">{strat_ver.upper()}</span>' if strat_ver == 'v2'
-            else f'<span class="badge" style="background:rgba(139,148,158,.15);color:var(--dim)">{strat_ver.upper()}</span>'
-        )
-        p_pos_rows += f'<tr><td><strong>{real_sym}</strong></td><td>{ver_badge}</td><td><span class="badge badge-blue">{exch.upper()}</span></td><td>+{pump:.0f}%</td><td style="color:var(--dim)">${notional:,.0f}</td><td class="{cls}" style="font-weight:700">{upnl:+.1f}%{usd_str}</td></tr>'
-    if not p_pos_rows:
-        p_pos_rows = '<tr><td colspan="6" style="color:var(--dim)">Scanner hunting...</td></tr>'
+        p_pos_rows += f'<tr><td><strong>{real_sym}</strong></td><td><span class="badge badge-purple">{strat_ver.upper()}</span></td><td><span class="badge badge-blue">{exch.upper()}</span></td><td>+{pump:.0f}%</td><td>${notional:,.0f}</td><td class="{cls}" style="font-weight:700">{upnl:+.1f}%{usd_str}</td></tr>'
+    if not p_pos_rows: p_pos_rows = '<tr><td colspan="6" style="color:var(--dim)">Scanner hunting...</td></tr>'
     p_upnl_cls = "pos" if p_upnl >= 0 else "neg"
     p_usd_info = f' (${p_upnl_usd:+,.0f})' if p_upnl_usd != 0 else ''
     ph_status = '<span class="badge badge-green">\U0001f7e2 SCANNING</span>' if ph else '<span class="badge" style="background:rgba(139,148,158,.15);color:var(--dim)">\u23f3 OFFLINE</span>'
-
-    p_bal_pnl = (p_balance / p_deposit - 1) * 100 if p_deposit else 0
-    p_bal_cls = "pos" if p_bal_pnl >= 0 else "neg"
-
     pump_card = f'''<div class="card" style="cursor:pointer" onclick="window.location='/pumps'">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-    <h3>\U0001f3af Pump Hunter</h3><div>{p_mode_badge} {ph_status}</div>
-    </div>
-    <div class="card metric balance-card{" neg-balance" if p_bal_pnl < 0 else ""}" style="padding:16px;margin-bottom:16px;text-align:center" onclick="event.stopPropagation()">
-    <span class="label">\U0001f4b0 Balance</span>
-    <span class="value" style="font-size:24px">${p_balance:,.2f}</span>
-    <span style="display:block;font-size:11px;color:var(--dim);margin-top:4px">Deposit: ${p_deposit:,.0f} | PnL: <span class="{p_bal_cls}">{p_bal_pnl:+.1f}%</span></span>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><h3>\U0001f3af Pump Hunter</h3><div>{ph_status}</div></div>
+    <div class="card metric balance-card" style="padding:16px;margin-bottom:16px;text-align:center" onclick="event.stopPropagation()">
+    <span class="label">\U0001f4b0 Balance</span><span class="value" style="font-size:24px">${p_balance:,.2f}</span>
     </div>
     <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
     <div class="card metric" style="padding:12px" onclick="event.stopPropagation();window.location='/pumps/trades'"><span class="label">\U0001f4c8 PnL</span><span class="value {pnl_cls(p_pnl)}" style="font-size:20px">{p_pnl:+.1f}%</span></div>
     <div class="card metric" style="padding:12px"><span class="label">Win Rate</span><span class="value" style="font-size:20px">{p_wr:.0f}%</span></div>
-    <div class="card metric" style="padding:12px"><span class="label">Trades</span><span class="value" style="font-size:20px">{p_tot} <small style="color:var(--dim)">W{p_wins}/L{p_losses}</small></span></div>
-    </div>
-    <table><thead><tr><th>Symbol</th><th>Strategy</th><th>Exchange</th><th>Pump</th><th>Size $</th><th>uPnL</th></tr></thead><tbody>{p_pos_rows}</tbody></table>
-    <p style="margin-top:8px;font-size:12px;color:var(--dim)">Active: {len(p_active)} \u00b7 <span class="{p_upnl_cls}">uPnL: {p_upnl:+.1f}%{p_usd_info}</span> \u00b7 Click for details \u2192</p>
-    </div>'''
-
-    # ─── Insider Scanner Card ─────────────────────
-    ins = insider_state()
-    ins_balance = ins.get("balance", 10000) if ins else 10000
-    ins_deposit = 10000
-    ins_pnl_usd = ins_balance - ins_deposit
-    ins_pnl_pct = (ins_balance / ins_deposit - 1) * 100 if ins_deposit else 0
-    ins_active = ins.get("active_positions", {}) if ins else {}
-
-    # Load insider trades
+    <div class="card metric" style="padding:12px"><span class="label">Trades</span><span class="value" style="font-size:20px">{p_tot}</span></div>
+    </div><table><thead><tr><th>Symbol</th><th>Ver</th><th>Exch</th><th>Pump</th><th>Size</th><th>uPnL</th></tr></thead><tbody>{p_pos_rows}</tbody></table>
+    <p style="margin-top:8px;font-size:12px;color:var(--dim)">Active: {len(p_active)} \u00b7 <span class="{p_upnl_cls}">uPnL: {p_upnl:+.1f}%{p_usd_info}</span> \u00b7 Click for details \u2192</p></div>'''
     ins_trades = []
     try:
         ins_trades_path = INSIDER_TRADES
         if ins_trades_path.exists():
             ins_trades = json.loads(ins_trades_path.read_text(encoding="utf-8"))
-            if not isinstance(ins_trades, list):
-                ins_trades = []
-    except Exception:
-        ins_trades = []
-
+            if not isinstance(ins_trades, list): ins_trades = []
+    except Exception: ins_trades = []
     ins_total = len(ins_trades)
     ins_wins = sum(1 for t in ins_trades if t.get("pnl_pct", 0) > 0)
-    ins_losses = ins_total - ins_wins
-    ins_wr = ins_wins / max(1, ins_total) * 100
     ins_sum_pnl = sum(t.get("pnl_pct", 0) for t in ins_trades)
-    ins_bal_cls = "pos" if ins_pnl_pct >= 0 else "neg"
-
-    # Insider positions rows
     ins_pos_rows = ""
     ins_upnl = 0.0
     ins_upnl_usd = 0.0
@@ -559,10 +610,7 @@ def page_home():
         ex = pos.get("exchange", "?")
         entry = float(pos.get("entry_price", 0))
         cur = fetch_price(sym, ex)
-        if entry > 0 and cur > 0:
-            upnl = ((cur / entry) - 1) * 100
-        else:
-            upnl = 0
+        upnl = ((cur / entry) - 1) * 100 if entry > 0 and cur > 0 else 0
         size_u = float(pos.get("size_usdt", 0))
         lev = float(pos.get("leverage", 10))
         notional = size_u * lev
@@ -570,41 +618,37 @@ def page_home():
         ins_upnl += upnl
         ins_upnl_usd += upnl_d
         cls = "pos" if upnl >= 0 else "neg"
-        score = pos.get("insider_score", "?")
-        usd_str = f' <span style="font-size:11px">(${upnl_d:+,.0f})</span>' if upnl_d != 0 else ''
-        ins_pos_rows += f'<tr><td><strong>{sym}</strong></td><td><span class="badge badge-blue">{ex.upper()}</span></td><td>{score}</td><td class="{cls}" style="font-weight:700">{upnl:+.1f}%{usd_str}</td></tr>'
-    if not ins_pos_rows:
-        ins_pos_rows = '<tr><td colspan="4" style="color:var(--dim)">Scanner hunting...</td></tr>'
-    ins_upnl_cls = "pos" if ins_upnl >= 0 else "neg"
-    ins_usd_info = f' (${ins_upnl_usd:+,.0f})' if ins_upnl_usd != 0 else ''
-
-    # Scanner status
+        ins_pos_rows += f'<tr><td><strong>{sym}</strong></td><td><span class="badge badge-blue">{ex.upper()}</span></td><td>{pos.get("insider_score","?")}</td><td class="{cls}" style="font-weight:700">{upnl:+.1f}%</td></tr>'
+    if not ins_pos_rows: ins_pos_rows = '<tr><td colspan="4" style="color:var(--dim)">Scanner hunting...</td></tr>'
     ins_oi = insider_oi_history()
     ins_last_updated = ins_oi.get("last_updated", 0) if ins_oi else 0
     ins_online = (time.time() - float(ins_last_updated)) < 600 if ins_last_updated else False
     ins_status = '<span class="badge badge-green">\U0001f7e2 SCANNING</span>' if ins_online else '<span class="badge" style="background:rgba(139,148,158,.15);color:var(--dim)">\u23f3 OFFLINE</span>'
-
     insider_card = f'''<div class="card" style="cursor:pointer" onclick="window.location='/insider'">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-    <h3>\U0001f575\ufe0f Insider Scanner</h3><div>{ins_status}</div>
-    </div>
-    <div class="card metric balance-card{" neg-balance" if ins_pnl_pct < 0 else ""}" style="padding:16px;margin-bottom:16px;text-align:center" onclick="event.stopPropagation()">
-    <span class="label">\U0001f4b0 Balance</span>
-    <span class="value" style="font-size:24px">${ins_balance:,.0f}</span>
-    <span style="display:block;font-size:11px;color:var(--dim);margin-top:4px">Deposit: ${ins_deposit:,.0f} | PnL: <span class="{ins_bal_cls}">{ins_pnl_pct:+.1f}%</span></span>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><h3>\U0001f575\ufe0f Insider Scanner</h3><div>{ins_status}</div></div>
+    <div class="card metric balance-card" style="padding:16px;margin-bottom:16px;text-align:center" onclick="event.stopPropagation()">
+    <span class="label">\U0001f4b0 Balance</span><span class="value" style="font-size:24px">${ins_balance:,.0f}</span>
     </div>
     <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
     <div class="card metric" style="padding:12px"><span class="label">\U0001f4c8 PnL</span><span class="value {pnl_cls(ins_sum_pnl)}" style="font-size:20px">{ins_sum_pnl:+.1f}%</span></div>
-    <div class="card metric" style="padding:12px"><span class="label">Win Rate</span><span class="value" style="font-size:20px;color:{"var(--green)" if ins_wr >= 50 else "var(--orange)"}">{ins_wr:.0f}%</span></div>
-    <div class="card metric" style="padding:12px"><span class="label">Trades</span><span class="value" style="font-size:20px">{ins_total} <small style="color:var(--dim)">W{ins_wins}/L{ins_losses}</small></span></div>
+    <div class="card metric" style="padding:12px"><span class="label">Win Rate</span><span class="value" style="font-size:20px">{ins_wins/max(1,ins_total)*100:.0f}%</span></div>
+    <div class="card metric" style="padding:12px"><span class="label">Trades</span><span class="value" style="font-size:20px">{ins_total}</span></div>
+    </div><table><thead><tr><th>Symbol</th><th>Exch</th><th>Score</th><th>uPnL</th></tr></thead><tbody>{ins_pos_rows}</tbody></table>
+    <p style="margin-top:8px;font-size:12px;color:var(--dim)">Active: {len(ins_active)} \u00b7 <span class="{pnl_cls(ins_upnl)}">uPnL: {ins_upnl:+.1f}%</span> \u00b7 Click for details \u2192</p>{_insider_tg_mini()}</div>'''
+    lhb_card = f'''<div class="card" style="cursor:pointer" onclick="window.location='/liquidation_hunter'">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><h3>💥 Liquidation Hunter</h3><div>{lhb_status}</div></div>
+    <div class="card metric balance-card{" neg-balance" if lhb_net_pnl < 0 else ""}" style="padding:16px;margin-bottom:16px;text-align:center" onclick="event.stopPropagation()">
+    <span class="label">🧪 Paper Balance</span><span class="value" style="font-size:24px">${lhb_balance:,.2f}</span>
     </div>
-    <table><thead><tr><th>Symbol</th><th>Exchange</th><th>Score</th><th>uPnL</th></tr></thead><tbody>{ins_pos_rows}</tbody></table>
-    <p style="margin-top:8px;font-size:12px;color:var(--dim)">Active: {len(ins_active)} \u00b7 <span class="{ins_upnl_cls}">uPnL: {ins_upnl:+.1f}%{ins_usd_info}</span> \u00b7 Click for details \u2192</p>
-    </div>'''
-
-    return layout("\U0001f3e0 HQ Overview", combined + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">' + soldier + pump_card + insider_card + '</div>', "/")
-
-# ─── Scalper Pages ──────────────────────────────────
+    <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+    <div class="card metric" style="padding:12px"><span class="label">\U0001f4c8 PnL</span><span class="value {pnl_cls(lhb_net_pnl)}" style="font-size:18px">{lhb_net_pnl_pct:+.2f}%</span></div>
+    <div class="card metric" style="padding:12px"><span class="label">Win Rate</span><span class="value" style="font-size:18px">{lhb_wr:.0f}%</span></div>
+    <div class="card metric" style="padding:12px"><span class="label">Stress</span><span class="value" style="font-size:18px;color:{sc}">{global_stress_level}</span></div>
+    </div><table><thead><tr><th>Symbol</th><th>Direction</th><th>uPnL</th></tr></thead><tbody>{lhb_pos_rows}</tbody></table>
+    <p style="margin-top:8px;font-size:12px;color:var(--dim)">Active: {lhb_active_count} \u00b7 <span class="{pnl_cls(lhb_net_pnl)}">Net: ${lhb_net_pnl:+,.2f}</span> \u00b7 Click for details \u2192</p></div>'''
+    grid_container = f'''<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));gap:16px">
+    {soldier}{pump_card}{insider_card}{lhb_card}</div>'''
+    return layout("\U0001f3e0 HQ Overview", combined + grid_container, "/")
 
 def page_scalper():
     s = state()
@@ -3140,6 +3184,8 @@ if page_insider:
     ROUTES["/insider"] = page_insider
 if page_insider_signals:
     ROUTES["/insider/signals"] = page_insider_signals
+if page_insider_feed:
+    ROUTES["/insider/feed"] = page_insider_feed
 if page_iie:
     ROUTES["/iie"] = page_iie
 if page_iie_impulses:
@@ -3148,6 +3194,8 @@ if page_iie_coins:
     ROUTES["/iie/coins"] = page_iie_coins
 if page_iie_config:
     ROUTES["/iie/config"] = page_iie_config
+if page_liquidation_hunter:
+    ROUTES["/liquidation_hunter"] = page_liquidation_hunter
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):

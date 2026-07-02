@@ -1,219 +1,159 @@
-# Local Crypto Futures Scalping NN
+# 🧊 $CHILLER — AI-Powered Yield Vault
 
-Локальный стартовый проект для обучения нейросети на свечах фьючерсов и проверки импульсной скальпинг-логики без облака.
+> **Nothing promised. Nothing guaranteed. Just chill & see what happens.**
 
-Что внутри:
+Decentralized vault on Solana where AI trading bots manage pooled capital via Drift Protocol. Users deposit SOL, receive $CHILLER tokens, and bots trade perpetuals to grow the vault's NAV.
 
-- оффлайн загрузка CSV со свечами
-- загрузка реальных свечей Bybit по выбранному периоду
-- генерация импульсных и микроструктурных признаков
-- разметка `long / flat / short` по будущему движению
-- небольшая нейросеть на PyTorch
-- бэктест с комиссиями, slippage и cooldown
-- интерактивная research-среда для ручного просмотра свечей и сигналов
-- локальный LLM-vault для хранения и синтеза торговых гипотез
+---
 
-## Формат CSV
+## Architecture
 
-Нужны колонки:
-
-- `timestamp`
-- `open`
-- `high`
-- `low`
-- `close`
-- `volume`
-
-`timestamp` может быть Unix в миллисекундах или ISO-датой.
-
-## Быстрый старт
-
-Установить зависимости:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
+```
+┌──────────────────────────────────────────────────┐
+│                    Users                          │
+│         Deposit SOL → Get $CHILLER                │
+│         Burn $CHILLER → Get SOL back              │
+└──────────────┬───────────────────┬────────────────┘
+               │                   │
+     ┌─────────▼──────┐   ┌──────▼──────────┐
+     │  Landing Page   │   │   Dashboard      │
+     │  chillercoin.io │   │  app.chiller.io  │
+     └────────────────┘   └───────┬──────────┘
+                                   │
+                    ┌──────────────▼──────────────┐
+                    │     Solana Smart Contract    │
+                    │     (Anchor / Rust)          │
+                    │  ┌────────────────────────┐  │
+                    │  │ VaultState              │  │
+                    │  │ ├ total_assets (SOL)    │  │
+                    │  │ ├ total_supply ($CHILL) │  │
+                    │  │ ├ high_water_mark       │  │
+                    │  │ ├ trades / wins / pnl   │  │
+                    │  │ └ fee config            │  │
+                    │  └────────────────────────┘  │
+                    └──────────────┬──────────────┘
+                                   │
+                    ┌──────────────▼──────────────┐
+                    │       Vault Bridge           │
+                    │    (Python · vault_bridge.py)│
+                    │  ├ NAV updates               │
+                    │  ├ Trade logging              │
+                    │  └ Position sync              │
+                    └──────────────┬──────────────┘
+                                   │
+                    ┌──────────────▼──────────────┐
+                    │     Exchange Adapter          │
+                    │  ├ DriftAdapter (on-chain)    │
+                    │  ├ BybitAdapter (CEX)          │
+                    │  └ PaperAdapter (testing)      │
+                    └──────────────┬──────────────┘
+                                   │
+                    ┌──────────────▼──────────────┐
+                    │      Trading Bots            │
+                    │  ├ Soldier (trend-following)  │
+                    │  └ Scalper Pro (mean-revert)  │
+                    └──────────────────────────────┘
 ```
 
-Сгенерировать демо-датасет:
+## Project Structure
 
-```bash
-crypto-scalp make-demo-data --output data/demo_btcusdt_1m.csv
+```
+Crypto-Code/
+├── chiller-vault/           # Solana smart contract (Anchor)
+│   ├── programs/            # Rust program source
+│   ├── tests/               # TypeScript integration tests
+│   ├── vault_bridge.py      # On-chain ↔ exchange bridge
+│   ├── exchange_adapter.py  # Pluggable exchange adapters
+│   └── deploy-devnet.sh     # One-click devnet deploy
+│
+├── chiller-dashboard/       # Web dashboard (vanilla JS)
+│   ├── index.html           # SPA with 3 pages
+│   ├── style.css            # Dark/Light theme system
+│   ├── app.js               # Wallet connect, charts, vault UI
+│   └── deploy.sh            # One-click VPS deploy
+│
+├── chiller-landing/         # Marketing landing page
+│   ├── index.html
+│   └── style.css
+│
+└── chiller-tg-bot/          # Telegram bot
+    ├── bot.py               # 7 commands + trade broadcasts
+    ├── .env                 # Credentials (not committed)
+    └── requirements.txt
 ```
 
-Обучить модель:
+## Quick Start
 
+### Dashboard (local)
 ```bash
-crypto-scalp train \
-  --data data/demo_btcusdt_1m.csv \
-  --artifacts artifacts/demo_run
+cd chiller-dashboard
+python3 -m http.server 8080
+# → http://localhost:8080
 ```
 
-Запустить бэктест:
-
+### Deploy to VPS
 ```bash
-crypto-scalp backtest \
-  --data data/demo_btcusdt_1m.csv \
-  --artifacts artifacts/demo_run
+cd chiller-dashboard
+./deploy.sh all              # Deploy everything
+./deploy.sh dashboard        # Dashboard only
+./deploy.sh landing          # Landing only
 ```
 
-Открыть исследовательскую среду:
-
+### Vault Contract
 ```bash
-crypto-scalp research-app \
-  --data data/demo_btcusdt_1m.csv \
-  --artifacts artifacts/demo_run
+cd chiller-vault
+anchor build                 # Compile
+anchor test                  # Run tests (11/11)
+./deploy-devnet.sh           # Deploy to Solana devnet
 ```
 
-После запуска откроется локальный Streamlit-интерфейс, где можно:
-
-- руками выбирать CSV и папку с моделью
-- двигать окно по истории и смотреть конкретные свечи
-- видеть OHLC, объем, быстрые признаки и вероятности модели
-- исследовать участок через таблицу с признаками и таргетами
-- сверять окно графика с train/backtest summary
-
-Скачать реальные свечи Bybit в CSV:
-
+### Vault Bridge
 ```bash
-crypto-scalp download-bybit \
-  --symbol BTCUSDT \
-  --interval 1 \
-  --start 2026-04-01 \
-  --end 2026-04-16 \
-  --output data/bybit_btcusdt_1_20260401_20260416.csv
+cd chiller-vault
+python3 vault_bridge.py --cluster devnet status
+python3 vault_bridge.py --cluster devnet daemon --exchange drift
+python3 vault_bridge.py --cluster devnet daemon --exchange paper
 ```
 
-Внутри UI есть отдельная панель `Download Bybit candles`, где можно руками выбрать:
-
-- символ, например `BTCUSDT`
-- таймфрейм, например `1`, `5`, `15`, `60`
-- дату начала
-- дату конца
-- время начала в UTC
-- время конца в UTC
-- путь сохранения CSV
-- готовые пресеты инструментов, включая `SOLUSDT`, `XRPUSDT`, `SUIUSDT`
-- прогресс загрузки по чанкам
-- автоматическое использование уже сохраненного локального CSV, если он полностью покрывает выбранный диапазон без пропусков
-
-## Minute Impulse And Paper Trading
-
-Bybit API дает минимальные готовые свечи `1m`, поэтому основной алгоритм строится вокруг минутных импульсов:
-
-- `dollar_volume = turnover` из Bybit, если поле есть
-- иначе `dollar_volume = close * volume`
-- резкое движение ищется через `$ volume z` относительно обычного режима
-- одновременно проверяется `price return z`
-- гипотеза хранит стоп, отмену, take-profit и порог допуска в paper trading
-
-Рабочий поток:
-
-- выбрать участок на графике в `Market Research`
-- отправить его в `Hypothesis Vault`
-- в карточке гипотезы нажать `Study on history`
-- посмотреть `Похожих паттернов`, `Сделок`, `Win rate`
-- если результат проходит порог, нажать `Send to paper test`
-- открыть вкладку `Paper Trading` и запустить demo-loop
-
-Запуск paper-loop из CLI:
-
+### TG Bot
 ```bash
-crypto-scalp paper-trade-live \
-  --symbol SOLUSDT \
-  --duration-seconds 300 \
-  --deposit-usdt 1000
+cd chiller-tg-bot
+# Edit .env with your BOT_TOKEN from @BotFather
+pip install -r requirements.txt
+python3 bot.py
 ```
 
-Paper-loop использует исторический CSV из проверки гипотезы как baseline для обычного режима, а live-поток агрегирует в `1m+` бары под таймфрейм гипотезы.
+## Features
 
-## Local AI Vault
+| Feature | Status |
+|---------|--------|
+| Solana Vault (Anchor) | ✅ Built, 11/11 tests |
+| Dashboard (Dark/Light) | ✅ Deployed |
+| Multi-wallet (Phantom/Solflare/Backpack) | ✅ |
+| Vault Bridge | ✅ |
+| Exchange Adapters (Drift/Bybit/Paper) | ✅ |
+| TG Bot (7 commands) | ✅ Code ready |
+| VPS Hardened (SSH/UFW/fail2ban) | ✅ |
+| Trade Broadcast | ✅ |
+| SSL/HTTPS | ⏳ Needs domain |
+| Devnet Deploy | ⏳ Needs SOL airdrop |
 
-Под твой `Mac mini M4 16 GB` рекомендую:
+## Security
 
-- основной reasoning-моделью `qwen3:4b`
-- для поиска по гипотезам `embeddinggemma`
+- **VPS**: SSH key-only (port 2847), no root login, UFW, fail2ban
+- **Nginx**: Rate limiting, bot blocking, version hidden, security headers
+- **Vault**: Authority-only operations, pause capability, fee caps
+- **Frontend**: No private keys stored, wallet-only auth
 
-Почему так:
+## Tech Stack
 
-- `qwen3:4b` дает хороший баланс качества, скорости и памяти
-- `embeddinggemma` легкая и подходит для semantic search по локальной базе гипотез
-- обе модели удобно запускать через Ollama на macOS
+- **Contract**: Rust / Anchor Framework / Solana
+- **Frontend**: Vanilla HTML/CSS/JS (no framework overhead)
+- **Bridge**: Python / solders
+- **Bot**: python-telegram-bot
+- **Server**: Ubuntu 24.04 / Nginx / UFW / fail2ban
+- **Exchange**: Drift Protocol (on-chain DEX)
 
-Инициализация vault:
+---
 
-```bash
-source .venv/bin/activate
-crypto-scalp ai-init
-```
-
-Скачать модели:
-
-```bash
-ollama serve
-crypto-scalp ai-pull --model qwen3:4b
-crypto-scalp ai-pull --model embeddinggemma
-```
-
-Добавить гипотезу:
-
-```bash
-crypto-scalp hypothesis-add \
-  --title "BTC impulse after volume burst" \
-  --thesis "Если на 1m идет всплеск объема и пробой локального high, импульс часто продолжается 3-5 свечей" \
-  --evidence "На BTCUSDT в лондонскую сессию это видно чаще при ret_fast > 0 и volume_z > 2" \
-  --tags "btc,impulse,volume,breakout" \
-  --symbol BTCUSDT \
-  --timeframe 1m
-```
-
-Поиск по vault:
-
-```bash
-crypto-scalp hypothesis-search --query "volume breakout on BTC 1m"
-```
-
-Синтез идей локальной моделью:
-
-```bash
-crypto-scalp hypothesis-synthesize \
-  --query "Какие сетапы по BTCUSDT 1m у нас уже подтверждаются?" \
-  --symbol BTCUSDT \
-  --timeframe 1m \
-  --top-k 8 \
-  --batch-size 4
-```
-
-Теперь synthesis идет не по всему vault целиком, а через memory pipeline:
-
-- retrieval отбирает релевантные гипотезы и релевантные summary memories
-- batch summaries сжимают найденные гипотезы в короткие кластеры
-- final synthesis строится уже по этим выжимкам, чтобы не упираться в контекстное окно модели
-- batch и final summaries сохраняются в SQLite как отдельный summary-memory слой
-
-Посмотреть накопленный слой summaries:
-
-```bash
-crypto-scalp summary-memory-list --symbol BTCUSDT --timeframe 1m
-```
-
-## Идея стратегии
-
-Модель ищет импульсные моменты:
-
-- ускорение доходности на коротком окне
-- всплеск объема
-- расширение диапазона свечи
-- отклонение цены от краткосрочной средней
-- сочетание momentum и volatility breakout
-
-Разметка строится по будущему движению за несколько свечей вперед. Если ожидаемое движение выше порога вверх, класс `long`, если вниз, класс `short`, иначе `flat`.
-
-## Важные замечания
-
-- Это research scaffold, а не готовый боевой бот.
-- Для реальной торговли нужны биржевой коннектор, order management, latency-замеры и строгий риск-менеджмент.
-- Для фьючерсов обязательно учитывай комиссию, funding, slippage, ликвидационные риски и limit на плечо.
-- Для UI нужны `streamlit` и `plotly`, они уже добавлены в зависимости проекта.
-- Для скачивания Bybit используется публичный REST API V5 `/v5/market/kline`.
+*🧊 Just chill.*
