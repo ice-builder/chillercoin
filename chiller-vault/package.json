@@ -25,5 +25,9 @@
     "ts-node": "^10.9.2",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "anchor-bankrun": "^0.5.0",
+    "solana-bankrun": "^0.4.0"
   }
 }
