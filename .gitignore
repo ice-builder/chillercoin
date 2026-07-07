@@ -55,3 +55,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.iml
+
+# Landing page (deployed via VPS)
+chiller-landing/
