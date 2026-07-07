@@ -8,6 +8,113 @@
     <link rel="icon" type="image/png" href="logo.png">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
+    <style>
+        /* ═══════ Mascot Integration ═══════ */
+        @keyframes mascotFloat {
+            0%, 100% { transform: translateY(0) rotate(0deg); }
+            25% { transform: translateY(-15px) rotate(1.5deg); }
+            75% { transform: translateY(10px) rotate(-1deg); }
+        }
+
+        /* Hero: two-column layout */
+        .hero-layout {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 60px;
+            max-width: 1200px;
+            margin: 0 auto;
+            position: relative;
+        }
+        .hero-content {
+            text-align: left !important;
+        }
+        .hero-sub {
+            margin-left: 0 !important;
+            margin-right: auto !important;
+        }
+        .hero-actions {
+            justify-content: flex-start !important;
+        }
+        .hero-mascot {
+            flex-shrink: 0;
+            width: 380px;
+            animation: mascotFloat 4s ease-in-out infinite;
+            filter: drop-shadow(0 25px 50px rgba(0,120,255,0.2));
+        }
+        .hero-mascot img {
+            width: 100%;
+            height: auto;
+            border-radius: 24px;
+        }
+
+        /* Origin: duo at the bottom */
+        .origin-mascot {
+            text-align: center;
+            margin-top: 2rem;
+        }
+        .origin-mascot img {
+            width: 260px;
+            border-radius: 20px;
+            filter: drop-shadow(0 10px 30px rgba(0,120,255,0.15));
+            transition: transform 0.3s ease;
+        }
+        .origin-mascot img:hover { transform: scale(1.05); }
+        .origin-mascot p {
+            margin-top: 0.75rem;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            font-style: italic;
+        }
+
+        /* Meme With Meat: Chilly in $CHILLER col */
+        .mwm-mascot {
+            text-align: center;
+            margin-top: 1rem;
+        }
+        .mwm-mascot img {
+            width: 130px;
+            border-radius: 16px;
+            filter: drop-shadow(0 8px 20px rgba(0,120,255,0.2));
+            animation: mascotFloat 3s ease-in-out infinite;
+        }
+
+        /* CTA: whale alert */
+        .cta-mascot {
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        .cta-mascot img {
+            width: 240px;
+            border-radius: 20px;
+            filter: drop-shadow(0 15px 35px rgba(0,120,255,0.2));
+            animation: mascotFloat 5s ease-in-out infinite;
+        }
+
+        /* ═══════ Mobile Responsive ═══════ */
+        @media (max-width: 900px) {
+            .hero-layout {
+                flex-direction: column;
+                gap: 30px;
+            }
+            .hero-content {
+                text-align: center !important;
+            }
+            .hero-sub {
+                margin-left: auto !important;
+                margin-right: auto !important;
+            }
+            .hero-actions {
+                justify-content: center !important;
+            }
+            .hero-mascot {
+                width: 250px;
+                order: -1; /* mascot appears above text on mobile */
+            }
+            .origin-mascot img { width: 200px; }
+            .cta-mascot img { width: 180px; }
+        }
+    </style>
 </head>
 <body>
     <!-- Particle canvas -->
@@ -38,45 +145,50 @@
     <!-- Hero Section -->
     <section id="hero">
         <div class="hero-glow"></div>
-        <div class="hero-content">
-            <div class="hero-badge">
-                <span class="badge-dot"></span>
-                Community Vault — Born from a Datacenter Fire 🔥🧊
+        <div class="hero-layout">
+            <div class="hero-content">
+                <div class="hero-badge">
+                    <span class="badge-dot"></span>
+                    Community Vault — Born from a Datacenter Fire 🔥🧊
+                </div>
+                <h1>
+                    <span class="hero-line-1">Buy. Hold.</span>
+                    <span class="hero-gradient">Just Chill.</span>
+                </h1>
+                <p class="hero-sub">
+                    We built AI trading bots. They work 24/7. We don't promise anything.<br>
+                    You're not investing — you're joining the ride. No guarantees, just vibes.
+                </p>
+                <div class="hero-stats">
+                    <div class="stat-card">
+                        <span class="stat-value" data-target="115" data-suffix="%">0%</span>
+                        <span class="stat-label">All-Time Return</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" data-target="85" data-suffix="%">0%</span>
+                        <span class="stat-label">Win Rate</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" data-target="431" data-suffix="">0</span>
+                        <span class="stat-label">Trades Executed</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" data-target="24" data-suffix="/7">0/7</span>
+                        <span class="stat-label">Always On</span>
+                    </div>
+                </div>
+                <div class="hero-actions">
+                    <a href="#" class="btn btn-primary">
+                        <span>Launch App</span>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                    </a>
+                    <a href="#how-it-works" class="btn btn-secondary">Learn More</a>
+                </div>
+                <p class="hero-note">Audited by CertiK · Powered by Solana</p>
             </div>
-            <h1>
-                <span class="hero-line-1">Buy. Hold.</span>
-                <span class="hero-gradient">Just Chill.</span>
-            </h1>
-            <p class="hero-sub">
-                We built AI trading bots. They work 24/7. We don't promise anything.<br>
-                You're not investing — you're joining the ride. No guarantees, just vibes.
-            </p>
-            <div class="hero-stats">
-                <div class="stat-card">
-                    <span class="stat-value" data-target="115" data-suffix="%">0%</span>
-                    <span class="stat-label">All-Time Return</span>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-value" data-target="85" data-suffix="%">0%</span>
-                    <span class="stat-label">Win Rate</span>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-value" data-target="431" data-suffix="">0</span>
-                    <span class="stat-label">Trades Executed</span>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-value" data-target="24" data-suffix="/7">0/7</span>
-                    <span class="stat-label">Always On</span>
-                </div>
+            <div class="hero-mascot">
+                <img src="mascots/duo.png" alt="Chilly & Frosty — The ChillerCoin Squad" loading="eager">
             </div>
-            <div class="hero-actions">
-                <a href="#" class="btn btn-primary">
-                    <span>Launch App</span>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                </a>
-                <a href="#how-it-works" class="btn btn-secondary">Learn More</a>
-            </div>
-            <p class="hero-note">Audited by CertiK · Powered by Solana</p>
         </div>
     </section>
 
@@ -115,6 +227,10 @@
                     <p>And then it hit us: <strong>what if "just chill" was the whole strategy?</strong></p>
                     <p>We had bots with 85% win rate. +115% returns. Running 24/7 for months. What if people could just... tag along? No promises. No guarantees. Just: <em>"here's what our bots do, you decide."</em></p>
                     <p class="origin-punch">The chiller broke. <strong>$CHILLER</strong> was born. 🧊</p>
+                </div>
+                <div class="origin-mascot">
+                    <img src="mascots/duo.png" alt="Chilly & Frosty" loading="lazy">
+                    <p>Meet Chilly 🐻‍❄️ & Frosty 🐧 — The ChillerCoin Squad</p>
                 </div>
             </div>
         </div>
@@ -492,7 +608,9 @@
 
                     <div class="mwm-col chiller">
                         <div class="mwm-crown">👑</div>
-                        <div class="mwm-emoji">🧊</div>
+                        <div class="mwm-mascot">
+                            <img src="mascots/chilly.png" alt="Chilly" loading="lazy">
+                        </div>
                         <h3>$CHILLER</h3>
                         <p>The best of both worlds</p>
                         <ul>
@@ -989,6 +1107,9 @@
         <div class="container">
             <div class="cta-card">
                 <div class="cta-glow"></div>
+                <div class="cta-mascot">
+                    <img src="mascots/whale.png" alt="Whale Alert" loading="lazy">
+                </div>
                 <h2>Ready to Chill?</h2>
                 <p>Join the community and be first to access the vault.</p>
                 <div class="cta-actions">
