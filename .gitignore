@@ -56,5 +56,44 @@ Thumbs.db
 .idea/
 *.iml
 
-# Landing page (deployed via VPS)
+# ─── Private / Internal (NOT for public GitHub) ──
 chiller-landing/
+chiller-tg-bot/
+vault/
+ZeroChainAI/
+liquidation-hunter-bot/
+src/
+deploy_vps/
+data/
+docs/
+scripts/
+artifacts/
+dashboard/
+landing/
+deepprotect/
+deepprotect-commercial-package/
+command-center/
+easytrener/
+meaning-map/
+oneprop-investor-package/
+testing-platform-ru/
+PoleznoEst/
+.local_ai/
+.streamlit/
+.gemini_tmp/
+.pytest_cache/
+demo_data.csv
+catalog.json
+pyproject.toml
+HOW_TO_USE.md
+USER_GUIDE.md
+PROJECT_STATUS.md
+ROADMAP.md
+*.parquet
+*.csv
+patch_executor.py
+fix_executor.py
+hl_mirror.py
+update_grafana.py
+package.json
+package-lock.json

@@ -1,9 +1,0 @@
-name = "zerochainai-contact"
-main = "worker.js"
-compatibility_date = "2024-09-25"
-
-[vars]
-# Set these via `wrangler secret put`:
-# TELEGRAM_BOT_TOKEN = "your-bot-token"
-# TELEGRAM_CHAT_ID = "your-chat-id"
-ALLOWED_ORIGIN = "https://0chain.ai"
