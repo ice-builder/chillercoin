@@ -10,6 +10,7 @@ name = "chiller_vault"
 
 [features]
 default = []
+localnet = []  # Test-only: allows zero upgrade authority in H-1 check
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []

@@ -202,21 +202,26 @@ pub mod chiller_vault {
         require!(ctx.accounts.chiller_mint.decimals == 6, VaultError::InvalidMintDecimals);
 
         // H-1 FIX: Verify caller is the program's upgrade authority
-        // Use proper deserialization of UpgradeableLoaderState
-        let pd_data = ctx.accounts.program_data.try_borrow_data()?;
         // ProgramData layout: 4-byte enum(3) + 8-byte slot + 1-byte Option<Pubkey>
-        // Total header = 45 bytes. We need bytes at [12] (option tag) and [13..45] (pubkey)
+        // Total header = 45 bytes. Bytes [12] = option tag, [13..45] = pubkey
+        let pd_data = ctx.accounts.program_data.try_borrow_data()?;
         require!(pd_data.len() >= 45, VaultError::Unauthorized);
         let option_tag = pd_data[12];
         if option_tag == 1 {
-            // Authority is set — verify it matches caller (unless loaded via --bpf-program with zeros)
-            let upgrade_auth = Pubkey::try_from(&pd_data[13..45]).map_err(|_| VaultError::Unauthorized)?;
-            if upgrade_auth != Pubkey::default() {
+            let upgrade_auth = Pubkey::try_from(&pd_data[13..45])
+                .map_err(|_| VaultError::Unauthorized)?;
+            // In test builds: --bpf-program sets upgrade_auth to zero, skip check
+            #[cfg(feature = "localnet")]
+            if upgrade_auth == Pubkey::default() {
+                msg!("⚠️ LOCALNET: skipping upgrade authority check (zero addr)");
+            } else {
                 require!(ctx.accounts.authority.key() == upgrade_auth, VaultError::Unauthorized);
             }
-            // If upgrade_auth == default (test validator), we only rely on Signer constraint
+            // Production: ALWAYS enforce strict check, no bypass
+            #[cfg(not(feature = "localnet"))]
+            require!(ctx.accounts.authority.key() == upgrade_auth, VaultError::Unauthorized);
         } else {
-            // Authority is None (immutable program) — reject
+            // Authority is None (immutable program) — reject init
             return Err(VaultError::Unauthorized.into());
         }
         drop(pd_data);

@@ -3,6 +3,7 @@
 [features]
 resolution = true
 skip-lint = false
+seeds = false
 
 [programs.localnet]
 chiller_vault = "7ayYqgiiBtXdk13f9DBFTxJoYKkZyr3AaaLt2f2TPDoH"
