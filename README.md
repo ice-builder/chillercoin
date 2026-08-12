@@ -95,8 +95,9 @@ Built with [Anchor](https://www.anchor-lang.com/) v0.31.1 on Solana.
 | `create_mint` | Authority | Create the $CHILLER SPL token mint |
 | `create_treasury` | Authority | Create the SOL treasury PDA |
 | `initialize` | Authority | Initialize vault with fee config |
-| `deposit` | Anyone | Deposit SOL → receive $CHILLER tokens |
-| `withdraw` | Anyone | Burn $CHILLER → receive SOL back |
+| `mint_with_attestation` | User + authority co-sign | Investor mint after KYT ticket |
+| `withdraw_with_attestation` | User + authority co-sign | Burn $CHILLER → SOL after screening |
+| `deposit` / `withdraw` | Disabled | Open path deprecated on-chain |
 | `update_nav` | Authority | Report total assets (on-chain + sleeve equity) |
 | `log_trade` | Authority | Log a completed trade on-chain |
 | `drain_to_trade` | Authority | Move SOL toward trading rails (daily limit) |
