@@ -1,7 +1,7 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════
 # $CHILLER — Deploy helper (ops only; no topology secrets in git)
-# Usage: ./deploy.sh [landing|dashboard|bot|all]
+# Usage: ./deploy.sh [landing|dashboard|all]
 #
 # Required env (or ~/.config/chiller/deploy.env / ./.deploy.env — gitignored):
 #   VPS_HOST, VPS_USER, VPS_PORT, SSH_KEY, REMOTE_BASE
@@ -57,14 +57,6 @@ deploy_dashboard() {
   ok "Dashboard deployed"
 }
 
-deploy_bot() {
-  log "Deploying bot package..."
-  "${SCP_CMD[@]}" -r ../chiller-tg-bot/* "$VPS_USER@$VPS_HOST:$REMOTE_BASE/bots/" 2>&1
-  log "Installing dependencies on VPS..."
-  "${SSH_CMD[@]}" "cd $REMOTE_BASE/bots && python3 -m venv venv 2>/dev/null; source venv/bin/activate && pip install -r requirements.txt -q" 2>&1
-  ok "Bot package deployed"
-}
-
 reload_nginx() {
   log "Reloading reverse proxy..."
   "${SSH_CMD[@]}" 'sudo nginx -t && sudo systemctl reload nginx' 2>&1
@@ -84,15 +76,13 @@ check_connection
 case "$TARGET" in
   landing) deploy_landing; reload_nginx ;;
   dashboard) deploy_dashboard; reload_nginx ;;
-  bot) deploy_bot ;;
   all)
     deploy_landing
     deploy_dashboard
-    deploy_bot 2>/dev/null || log "Bot package not found, skipping"
     reload_nginx
     ;;
   *)
-    echo "Usage: VPS_HOST=… VPS_USER=… VPS_PORT=… SSH_KEY=… REMOTE_BASE=… ./deploy.sh [landing|dashboard|bot|all]"
+    echo "Usage: VPS_HOST=… VPS_USER=… VPS_PORT=… SSH_KEY=… REMOTE_BASE=… ./deploy.sh [landing|dashboard|all]"
     exit 1
     ;;
 esac
