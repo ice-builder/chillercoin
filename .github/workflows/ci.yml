@@ -43,6 +43,10 @@ jobs:
           cache-dependency-path: chiller-vault/package-lock.json
       - name: Require BPF fixture
         run: test -f tests/fixtures/chiller_vault.so
+      - name: Stage BPF where bankrun loads it
+        run: |
+          mkdir -p target/deploy
+          cp tests/fixtures/chiller_vault.so target/deploy/chiller_vault.so
       - name: Install deps
         run: npm ci
       - name: Bankrun attestation suite

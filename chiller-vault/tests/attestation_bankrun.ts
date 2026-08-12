@@ -28,6 +28,18 @@ function sighash(name: string): Buffer {
   return createHash("sha256").update(`global:${name}`).digest().subarray(0, 8);
 }
 
+function resolveProgramSo(): string {
+  const fixture = path.resolve(__dirname, "fixtures/chiller_vault.so");
+  const built = path.resolve(__dirname, "../target/deploy/chiller_vault.so");
+  if (fs.existsSync(built)) return built;
+  if (fs.existsSync(fixture)) {
+    fs.mkdirSync(path.dirname(built), { recursive: true });
+    fs.copyFileSync(fixture, built);
+    return built;
+  }
+  throw new Error(`Missing BPF at ${fixture} or ${built}`);
+}
+
 const [vaultPda] = PublicKey.findProgramAddressSync([Buffer.from("vault")], PROGRAM_ID);
 const [chillerMint] = PublicKey.findProgramAddressSync([Buffer.from("chiller-mint")], PROGRAM_ID);
 const [solVaultPda] = PublicKey.findProgramAddressSync([Buffer.from("sol-vault")], PROGRAM_ID);
@@ -107,10 +119,7 @@ describe("mint_with_attestation (Bankrun)", function () {
   }
 
   before(async () => {
-    const programSo = path.resolve(__dirname, "../target/deploy/chiller_vault.so");
-    if (!fs.existsSync(programSo)) {
-      throw new Error(`Missing ${programSo} — run anchor build first`);
-    }
+    resolveProgramSo();
 
     authority = Keypair.generate();
     teamWallet = Keypair.generate();
@@ -425,6 +434,160 @@ describe("mint_with_attestation (Bankrun)", function () {
     } catch (e: any) {
       assert.ok(String(e.message || e).length > 0);
       console.log("    ✅ open withdraw rejected");
+    }
+  });
+
+  it("pause blocks drain_to_trade", async () => {
+    const pauseData = Buffer.alloc(9);
+    sighash("set_paused").copy(pauseData, 0);
+    pauseData[8] = 1;
+    await process(
+      [
+        new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+            { pubkey: vaultPda, isSigner: false, isWritable: true },
+          ],
+          data: pauseData,
+        }),
+      ],
+      [authority]
+    );
+    const drainData = Buffer.alloc(16);
+    sighash("drain_to_trade").copy(drainData, 0);
+    drainData.writeBigUInt64LE(BigInt(1_000_000), 8);
+    try {
+      await process(
+        [
+          new TransactionInstruction({
+            programId: PROGRAM_ID,
+            keys: [
+              { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+              { pubkey: vaultPda, isSigner: false, isWritable: true },
+              { pubkey: solVaultPda, isSigner: false, isWritable: true },
+              { pubkey: tradeWallet.publicKey, isSigner: false, isWritable: true },
+            ],
+            data: drainData,
+          }),
+        ],
+        [authority]
+      );
+      assert.fail("expected drain paused");
+    } catch (e: any) {
+      assert.ok(String(e.message || e).length > 0);
+      console.log("    ✅ drain blocked while paused");
+    }
+    pauseData[8] = 0;
+    await process(
+      [
+        new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+            { pubkey: vaultPda, isSigner: false, isWritable: true },
+          ],
+          data: pauseData,
+        }),
+      ],
+      [authority]
+    );
+  });
+});
+
+describe("initialize wallet alias guard", function () {
+  this.timeout(120_000);
+
+  it("rejects team_wallet == trade_wallet", async () => {
+    const programSo = resolveProgramSo();
+    const authority = Keypair.generate();
+    const team = Keypair.generate();
+    const user = Keypair.generate();
+    const pdHeader = Buffer.alloc(128);
+    pdHeader.writeUInt32LE(3, 0);
+    pdHeader.writeBigUInt64LE(BigInt(0), 4);
+    pdHeader[12] = 1;
+    authority.publicKey.toBuffer().copy(pdHeader, 13);
+    const ctx = await start(
+      [{ name: "chiller_vault", programId: PROGRAM_ID }],
+      [
+        { address: authority.publicKey, info: { lamports: 50 * LAMPORTS_PER_SOL, data: Buffer.alloc(0), owner: SystemProgram.programId, executable: false } },
+        { address: team.publicKey, info: { lamports: LAMPORTS_PER_SOL, data: Buffer.alloc(0), owner: SystemProgram.programId, executable: false } },
+        { address: user.publicKey, info: { lamports: LAMPORTS_PER_SOL, data: Buffer.alloc(0), owner: SystemProgram.programId, executable: false } },
+        { address: programData, info: { lamports: 10 * LAMPORTS_PER_SOL, data: pdHeader, owner: BPF_UPGRADEABLE, executable: false } },
+      ]
+    );
+    const banks = ctx.banksClient;
+    async function send(ixs: TransactionInstruction[], signers: Keypair[]) {
+      const tx = new Transaction().add(...ixs);
+      const [bh] = await banks.getLatestBlockhash();
+      tx.recentBlockhash = bh;
+      tx.feePayer = signers[0].publicKey;
+      tx.sign(...signers);
+      await banks.processTransaction(tx);
+    }
+    await send(
+      [
+        new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+            { pubkey: vaultPda, isSigner: false, isWritable: false },
+            { pubkey: chillerMint, isSigner: false, isWritable: true },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            { pubkey: RENT, isSigner: false, isWritable: false },
+          ],
+          data: sighash("create_mint"),
+        }),
+      ],
+      [authority]
+    );
+    await send(
+      [
+        new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+            { pubkey: solVaultPda, isSigner: false, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          ],
+          data: sighash("create_treasury"),
+        }),
+      ],
+      [authority]
+    );
+    const initData = Buffer.alloc(8 + 2 + 2 + 2 + 8 + 8);
+    sighash("initialize").copy(initData, 0);
+    initData.writeUInt16LE(2000, 8);
+    initData.writeUInt16LE(200, 10);
+    initData.writeUInt16LE(50, 12);
+    initData.writeBigUInt64LE(BigInt(500_000_000), 14);
+    initData.writeBigUInt64LE(BigInt(100_000_000_000), 22);
+    try {
+      await send(
+        [
+          new TransactionInstruction({
+            programId: PROGRAM_ID,
+            keys: [
+              { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+              { pubkey: vaultPda, isSigner: false, isWritable: true },
+              { pubkey: chillerMint, isSigner: false, isWritable: false },
+              { pubkey: solVaultPda, isSigner: false, isWritable: false },
+              { pubkey: team.publicKey, isSigner: false, isWritable: false },
+              { pubkey: team.publicKey, isSigner: false, isWritable: false },
+              { pubkey: programData, isSigner: false, isWritable: false },
+              { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            ],
+            data: initData,
+          }),
+        ],
+        [authority]
+      );
+      assert.fail("expected alias reject");
+    } catch (e: any) {
+      assert.ok(String(e.message || e).length > 0);
+      console.log("    ✅ team==trade alias rejected");
     }
   });
 });
