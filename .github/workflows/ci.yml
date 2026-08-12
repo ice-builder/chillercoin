@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: "24"
+          node-version: "20"
       - name: Scan public tree
         run: node scripts/public-push-audit.mjs
 
@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: "24"
+          node-version: "20"
       - name: Check app.js
         run: node --check chiller-dashboard/app.js
 
@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: "24"
+          node-version: "20"
           cache: npm
           cache-dependency-path: chiller-vault/package-lock.json
       - name: Require BPF fixture
