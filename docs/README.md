@@ -10,3 +10,5 @@ Public compliance and product docs for `$CHILLER` (no secrets, no trading engine
 | [db-and-sequences.md](./db-and-sequences.md) | Happy / reject sequences |
 
 Push gate: `node scripts/public-push-audit.mjs` → `scripts/reports/LATEST.md`.
+| [mint-with-attestation.md](./mint-with-attestation.md) | On-chain attested mint ix |
+

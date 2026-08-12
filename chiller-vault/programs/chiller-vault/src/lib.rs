@@ -111,6 +111,9 @@ pub enum VaultError {
     #[msg("Slippage exceeded")] SlippageExceeded,                    // M-1
     #[msg("Vault already initialized")] AlreadyInitialized,          // H-1
     #[msg("Invalid mint decimals (expected 6)")] InvalidMintDecimals, // M-2
+    #[msg("Attestation expired")] AttestationExpired,
+    #[msg("Attestation wallet mismatch")] AttestationWalletMismatch,
+    #[msg("Attestation authority unauthorized")] AttestationUnauthorized,
 }
 
 // ═══════════════════════════════════════════════
@@ -162,6 +165,36 @@ pub struct UserWithdrew {
     pub user: Pubkey, pub chiller_burned: u64,
     pub sol_gross: u64, pub withdrawal_fee: u64, pub sol_returned: u64,
     pub nav_at_withdrawal: u64, pub timestamp: i64,
+}
+
+#[event]
+pub struct AttestedMint {
+    pub user: Pubkey,
+    pub sol_amount: u64,
+    pub chiller_minted: u64,
+    pub nonce: [u8; 32],
+    pub nav_at_deposit: u64,
+    pub timestamp: i64,
+}
+
+/// Single-use attestation receipt PDA — prevents nonce replay.
+#[account]
+#[derive(InitSpace)]
+pub struct AttestationReceipt {
+    pub nonce: [u8; 32],
+    pub user: Pubkey,
+    pub amount: u64,
+    pub tokens_minted: u64,
+    pub attested_at: i64,
+    pub bump: u8,
+}
+
+/// Off-chain issuer + on-chain authority co-sign binding.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct AttestationArgs {
+    pub nonce: [u8; 32],
+    pub exp: i64,
+    pub attested_wallet: Pubkey,
 }
 
 #[event]
@@ -291,6 +324,85 @@ pub mod chiller_vault {
         if v.high_water_mark == 0 { v.high_water_mark = v.total_assets; }
 
         emit!(UserDeposited { user: ctx.accounts.user.key(), sol_amount: amount, chiller_minted: tokens, nav_at_deposit: nav, vault_total_assets: v.total_assets, timestamp: Clock::get()?.unix_timestamp });
+        Ok(())
+    }
+
+    /// Mint $CHILLER only with a single-use attestation (authority co-sign + nonce PDA).
+    /// Legacy `deposit` remains for compatibility; attested path is the compliance rail.
+    pub fn mint_with_attestation(
+        ctx: Context<MintWithAttestationCtx>,
+        amount: u64,
+        min_tokens_out: u64,
+        attestation: AttestationArgs,
+    ) -> Result<()> {
+        let v = &ctx.accounts.vault;
+        require!(!v.is_paused, VaultError::VaultPaused);
+        require!(amount > 0, VaultError::ZeroAmount);
+        require!(amount >= v.min_deposit, VaultError::DepositBelowMinimum);
+        require!(
+            ctx.accounts.attestation_authority.key() == v.authority,
+            VaultError::AttestationUnauthorized
+        );
+        require!(
+            attestation.attested_wallet == ctx.accounts.user.key(),
+            VaultError::AttestationWalletMismatch
+        );
+        let now = Clock::get()?.unix_timestamp;
+        require!(now <= attestation.exp, VaultError::AttestationExpired);
+
+        let tokens = v.tokens_for_deposit(amount);
+        require!(tokens > 0, VaultError::MathOverflow);
+        require!(tokens >= min_tokens_out, VaultError::SlippageExceeded);
+        let nav = v.nav_per_token();
+
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.user.to_account_info(),
+                    to: ctx.accounts.sol_vault.to_account_info(),
+                },
+            ),
+            amount,
+        )?;
+
+        let seeds = &[b"vault".as_ref(), &[v.bump]];
+        token::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo {
+                    mint: ctx.accounts.chiller_mint.to_account_info(),
+                    to: ctx.accounts.user_chiller.to_account_info(),
+                    authority: ctx.accounts.vault.to_account_info(),
+                },
+                &[seeds],
+            ),
+            tokens,
+        )?;
+
+        let receipt = &mut ctx.accounts.attestation_receipt;
+        receipt.nonce = attestation.nonce;
+        receipt.user = ctx.accounts.user.key();
+        receipt.amount = amount;
+        receipt.tokens_minted = tokens;
+        receipt.attested_at = now;
+        receipt.bump = ctx.bumps.attestation_receipt;
+
+        let v = &mut ctx.accounts.vault;
+        v.total_assets = v.total_assets.checked_add(amount).ok_or(VaultError::MathOverflow)?;
+        v.total_supply = v.total_supply.checked_add(tokens).ok_or(VaultError::MathOverflow)?;
+        if v.high_water_mark == 0 {
+            v.high_water_mark = v.total_assets;
+        }
+
+        emit!(AttestedMint {
+            user: ctx.accounts.user.key(),
+            sol_amount: amount,
+            chiller_minted: tokens,
+            nonce: attestation.nonce,
+            nav_at_deposit: nav,
+            timestamp: now,
+        });
         Ok(())
     }
 
@@ -627,6 +739,34 @@ pub struct DepositCtx<'info> {
     pub sol_vault: AccountInfo<'info>,
     #[account(mut, token::mint = vault.chiller_mint, token::authority = user)]
     pub user_chiller: Account<'info, anchor_spl::token::TokenAccount>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(amount: u64, min_tokens_out: u64, attestation: AttestationArgs)]
+pub struct MintWithAttestationCtx<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    /// Vault authority co-signs the attestation (ops / clean issuer key).
+    pub attestation_authority: Signer<'info>,
+    #[account(mut, seeds = [b"vault"], bump = vault.bump)]
+    pub vault: Account<'info, VaultState>,
+    #[account(mut, address = vault.chiller_mint)]
+    pub chiller_mint: Account<'info, Mint>,
+    /// CHECK: SOL treasury (program-owned)
+    #[account(mut, seeds = [b"sol-vault"], bump = vault.sol_vault_bump)]
+    pub sol_vault: AccountInfo<'info>,
+    #[account(mut, token::mint = vault.chiller_mint, token::authority = user)]
+    pub user_chiller: Account<'info, anchor_spl::token::TokenAccount>,
+    #[account(
+        init,
+        payer = user,
+        space = 8 + AttestationReceipt::INIT_SPACE,
+        seeds = [b"attestation", attestation.nonce.as_ref()],
+        bump
+    )]
+    pub attestation_receipt: Account<'info, AttestationReceipt>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
