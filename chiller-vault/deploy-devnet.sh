@@ -1,98 +1,69 @@
-#!/bin/bash
-# ═══════════════════════════════════════════════
-# Chiller Vault — Devnet Deploy & Test Script
-# Usage: ./deploy-devnet.sh
-# ═══════════════════════════════════════════════
-set -e
+#!/usr/bin/env bash
+# Devnet deploy helper — does NOT rewrite program IDs in source.
+# Usage:
+#   CLUSTER=devnet ./deploy-devnet.sh          # build + show plan
+#   CLUSTER=devnet DEPLOY=1 ./deploy-devnet.sh # deploy existing program id
+#
+# Required: Solana CLI, funded deployer (faucet or own SOL).
+# Optional: DEPLOYER_KEYPAIR (default ~/.config/solana/id.json)
+set -euo pipefail
 
 export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
 
-GREEN='\033[0;32m'
-CYAN='\033[0;36m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
+GREEN='\033[0;32m'; CYAN='\033[0;36m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log() { echo -e "${CYAN}[DEPLOY]${NC} $1"; }
 ok()  { echo -e "${GREEN}  ✅ $1${NC}"; }
 err() { echo -e "${RED}  ❌ $1${NC}"; exit 1; }
 warn(){ echo -e "${YELLOW}  ⚠️  $1${NC}"; }
 
-echo ""
-echo -e "${CYAN}🧊 CHILLER VAULT — Devnet Deploy${NC}"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT"
 
-# ─── Step 1: Check tools ───
-log "Checking tools..."
+CLUSTER="${CLUSTER:-devnet}"
+RPC="${RPC_URL:-https://api.devnet.solana.com}"
+DEPLOYER_KEYPAIR="${DEPLOYER_KEYPAIR:-$HOME/.config/solana/id.json}"
+PROGRAM_ID="${PROGRAM_ID:-7ayYqgiiBtXdk13f9DBFTxJoYKkZyr3AaaLt2f2TPDoH}"
+SO="${SO:-$ROOT/target/deploy/chiller_vault.so}"
+DO_DEPLOY="${DEPLOY:-0}"
+
 command -v solana >/dev/null 2>&1 || err "Solana CLI not found"
-command -v anchor >/dev/null 2>&1 || err "Anchor CLI not found"
-ok "Solana $(solana --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
-ok "Anchor $(anchor --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+[[ -f "$DEPLOYER_KEYPAIR" ]] || err "Missing deployer keypair: $DEPLOYER_KEYPAIR"
 
-# ─── Step 2: Configure devnet ───
-log "Configuring devnet..."
-solana config set --url devnet > /dev/null 2>&1
-WALLET=$(solana address 2>/dev/null)
-BALANCE=$(solana balance 2>/dev/null | grep -oE '[0-9]+\.?[0-9]*')
-ok "Wallet: $WALLET"
-ok "Balance: $BALANCE SOL"
+solana config set --url "$RPC" >/dev/null
+WALLET=$(solana-keygen pubkey "$DEPLOYER_KEYPAIR")
+ok "cluster=$CLUSTER wallet=$WALLET program=$PROGRAM_ID"
 
-# Check minimum balance
-if (( $(echo "$BALANCE < 2" | bc -l 2>/dev/null || echo "1") )); then
-    warn "Balance too low for deploy (need ~2 SOL)"
-    warn "Run: solana airdrop 2"
-    warn "Or visit: https://faucet.solana.com"
-    warn "Address: $WALLET"
-    exit 1
+# Faucet (best-effort) then require a small balance for deploy
+solana airdrop 2 "$WALLET" --url "$RPC" >/dev/null 2>&1 || warn "airdrop skipped/failed (rate limit is normal)"
+BALANCE=$(solana balance "$WALLET" --url "$RPC" 2>/dev/null | awk '{print $1}')
+ok "balance=${BALANCE:-unknown} SOL"
+
+if [[ ! -f "$SO" ]]; then
+  command -v cargo-build-sbf >/dev/null 2>&1 || err "cargo-build-sbf not found and $SO missing"
+  log "Building BPF (program id in source is not rewritten)..."
+  cargo-build-sbf --manifest-path programs/chiller-vault/Cargo.toml
+  [[ -f "$SO" ]] || err "build did not produce $SO"
+fi
+ok "BPF $(wc -c < "$SO") bytes"
+
+if [[ "$DO_DEPLOY" != "1" ]]; then
+  warn "Dry run. To deploy: DEPLOY=1 $0"
+  warn "This script never sed-rewrites declare_id / Anchor.toml."
+  warn "After deploy: transfer upgrade authority to a multisig before accepting value."
+  exit 0
 fi
 
-# ─── Step 3: Build ───
-log "Building Chiller Vault..."
-cd "$(dirname "$0")"
-anchor build 2>&1 | tail -3
-ok "Build complete"
-
-# Get program keypair
-PROGRAM_ID=$(solana-keygen pubkey target/deploy/chiller_vault-keypair.json 2>/dev/null)
-ok "Program ID: $PROGRAM_ID"
-
-# Update Anchor.toml with program ID
-sed -i '' "s|chiller_vault = \".*\"|chiller_vault = \"$PROGRAM_ID\"|g" Anchor.toml
-sed -i '' 's|cluster = "localnet"|cluster = "devnet"|g' Anchor.toml
-
-# Update lib.rs declare_id
-sed -i '' "s|declare_id!(\".*\")|declare_id!(\"$PROGRAM_ID\")|g" programs/chiller-vault/src/lib.rs
-
-# Rebuild with correct ID
-anchor build 2>&1 | tail -2
-ok "Rebuilt with correct program ID"
-
-# ─── Step 4: Deploy ───
-log "Deploying to devnet..."
-anchor deploy --provider.cluster devnet 2>&1 | tail -5
-
-DEPLOYED_ID=$(solana program show "$PROGRAM_ID" --url devnet 2>/dev/null | grep "Program Id" | awk '{print $3}')
-if [ -z "$DEPLOYED_ID" ]; then
-    err "Deploy failed — program not found on devnet"
+NEED=2
+if awk "BEGIN {exit !($BALANCE < $NEED)}"; then
+  err "Need ~${NEED} SOL to deploy. Faucet: https://faucet.solana.com  address $WALLET"
 fi
-ok "Deployed: $PROGRAM_ID"
-ok "Explorer: https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet"
 
-# ─── Step 5: Initialize Vault ───
-log "Initializing vault..."
-# Run anchor test which includes initialization
-anchor test --skip-local-validator --provider.cluster devnet 2>&1 | tail -10
+log "Deploying $SO as $PROGRAM_ID (upgrade authority = deployer)..."
+solana program deploy "$SO" \
+  --program-id "$PROGRAM_ID" \
+  --url "$RPC" \
+  --keypair "$DEPLOYER_KEYPAIR"
 
-echo ""
-echo -e "${GREEN}🚀 Chiller Vault deployed to Devnet!${NC}"
-echo ""
-echo "Program ID:  $PROGRAM_ID"
-echo "Authority:   $WALLET"
-echo "Explorer:    https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet"
-echo ""
-echo -e "${CYAN}Next steps:${NC}"
-echo "  1. Create Squads multisig at https://app.squads.so"
-echo "  2. Transfer authority to multisig"
-echo "  3. Test deposit/withdraw on devnet"
-echo ""
+ok "Deployed. Explorer: https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet"
+echo "Next: initialize vault, then transfer upgrade authority to multisig."
+echo "Do not run the full test glob against shared devnet."
