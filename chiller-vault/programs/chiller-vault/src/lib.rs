@@ -81,6 +81,21 @@ impl VaultState {
         if self.total_supply == 0 { return 0; }
         ((tokens as u128 * self.effective_assets() as u128) / self.total_supply as u128) as u64
     }
+
+    /// F-08: after 24h, pause expires — clear flag so mint/drain aren't frozen forever
+    /// and authority cannot refresh an active pause by calling set_paused(true) again.
+    pub fn clear_expired_pause(&mut self, now: i64) -> bool {
+        if self.is_paused && self.pause_timestamp > 0 && now.saturating_sub(self.pause_timestamp) >= 86400 {
+            self.is_paused = false;
+            return true;
+        }
+        false
+    }
+
+    pub fn require_not_paused(&self) -> Result<()> {
+        require!(!self.is_paused, VaultError::VaultPaused);
+        Ok(())
+    }
 }
 
 // ═══════════════════════════════════════════════
@@ -115,6 +130,12 @@ pub enum VaultError {
     #[msg("Attestation wallet mismatch")] AttestationWalletMismatch,
     #[msg("Attestation authority unauthorized")] AttestationUnauthorized,
     #[msg("Open deposit deprecated — use mint_with_attestation")] OpenDepositDeprecated,
+    #[msg("Attestation amount mismatch")] AttestationAmountMismatch,
+    #[msg("Attestation payload hash mismatch")] AttestationHashMismatch,
+    #[msg("Insufficient unallocated SOL in treasury for attested mint")] InsufficientUnallocatedSol,
+    #[msg("Open withdraw deprecated — use withdraw_with_attestation")] OpenWithdrawDeprecated,
+    #[msg("Already paused — unpause or wait for expiry before re-pause")] AlreadyPaused,
+    #[msg("Invalid wallet alias or default pubkey at initialize")] InvalidWalletAlias,
 }
 
 // ═══════════════════════════════════════════════
@@ -191,11 +212,38 @@ pub struct AttestationReceipt {
 }
 
 /// Off-chain issuer + on-chain authority co-sign binding.
+/// `payload_hash` = sha256(nonce || wallet || amount_lamports_le || exp_le)
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct AttestationArgs {
     pub nonce: [u8; 32],
     pub exp: i64,
     pub attested_wallet: Pubkey,
+    pub amount_lamports: u64,
+    pub payload_hash: [u8; 32],
+}
+
+/// Withdraw attestation (authority co-sign). Same hash scheme over token amount.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct WithdrawAttestationArgs {
+    pub nonce: [u8; 32],
+    pub exp: i64,
+    pub attested_wallet: Pubkey,
+    pub token_amount: u64,
+    pub payload_hash: [u8; 32],
+}
+
+fn mint_payload_hash(nonce: &[u8; 32], wallet: &Pubkey, amount: u64, exp: i64) -> [u8; 32] {
+    anchor_lang::solana_program::hash::hashv(&[
+        nonce.as_ref(),
+        wallet.as_ref(),
+        &amount.to_le_bytes(),
+        &exp.to_le_bytes(),
+    ])
+    .to_bytes()
+}
+
+fn withdraw_payload_hash(nonce: &[u8; 32], wallet: &Pubkey, tokens: u64, exp: i64) -> [u8; 32] {
+    mint_payload_hash(nonce, wallet, tokens, exp)
 }
 
 #[event]
@@ -260,13 +308,31 @@ pub mod chiller_vault {
         }
         drop(pd_data);
 
+        // F-09: reject default / protocol aliases / team==trade
+        let team = ctx.accounts.team_wallet.key();
+        let trade = ctx.accounts.trade_wallet.key();
+        let mint = ctx.accounts.chiller_mint.key();
+        let sol_v = ctx.accounts.sol_vault.key();
+        let vault_k = ctx.accounts.vault.key();
+        let prog = crate::ID;
+        require!(team != Pubkey::default() && trade != Pubkey::default(), VaultError::InvalidWalletAlias);
+        require!(team != trade, VaultError::InvalidWalletAlias);
+        require!(
+            team != mint && trade != mint
+                && team != sol_v && trade != sol_v
+                && team != vault_k && trade != vault_k
+                && team != prog && trade != prog,
+            VaultError::InvalidWalletAlias
+        );
+
         let v = &mut ctx.accounts.vault;
         require!(!v.initialized, VaultError::AlreadyInitialized);
+
         v.authority = ctx.accounts.authority.key();
         v.pending_authority = Pubkey::default();  // H-01: no pending transfer
-        v.chiller_mint = ctx.accounts.chiller_mint.key();
-        v.team_wallet = ctx.accounts.team_wallet.key();
-        v.trade_wallet = ctx.accounts.trade_wallet.key(); // C-1: whitelisted trade dest
+        v.chiller_mint = mint;
+        v.team_wallet = team;
+        v.trade_wallet = trade; // C-1: whitelisted trade dest
         v.total_assets = 0; v.total_supply = 0; v.high_water_mark = 0;
         v.total_trades = 0; v.total_wins = 0; v.cumulative_pnl_bps = 0;
         v.performance_fee_bps = perf; v.management_fee_bps = mgmt; v.withdrawal_fee_bps = wfee;
@@ -295,16 +361,22 @@ pub mod chiller_vault {
         err!(VaultError::OpenDepositDeprecated)
     }
 
-    /// Mint $CHILLER only with a single-use attestation (authority co-sign + nonce PDA).
-    /// Preferred / only mint path for investors.
+    /// Mint $CHILLER against **already deposited** SOL in sol-vault (no second transfer).
+    /// Investor flow: transfer SOL → treasury → KYT → authority co-signs this ix.
+    /// Unallocated treasury = sol_vault.lamports - rent - total_assets must cover `amount`.
     pub fn mint_with_attestation(
         ctx: Context<MintWithAttestationCtx>,
         amount: u64,
         min_tokens_out: u64,
         attestation: AttestationArgs,
     ) -> Result<()> {
+        {
+            let v = &mut ctx.accounts.vault;
+            let now = Clock::get()?.unix_timestamp;
+            v.clear_expired_pause(now);
+            v.require_not_paused()?;
+        }
         let v = &ctx.accounts.vault;
-        require!(!v.is_paused, VaultError::VaultPaused);
         require!(amount > 0, VaultError::ZeroAmount);
         require!(amount >= v.min_deposit, VaultError::DepositBelowMinimum);
         require!(
@@ -315,24 +387,37 @@ pub mod chiller_vault {
             attestation.attested_wallet == ctx.accounts.user.key(),
             VaultError::AttestationWalletMismatch
         );
+        require!(
+            amount == attestation.amount_lamports,
+            VaultError::AttestationAmountMismatch
+        );
+        let expected = mint_payload_hash(
+            &attestation.nonce,
+            &attestation.attested_wallet,
+            attestation.amount_lamports,
+            attestation.exp,
+        );
+        require!(
+            expected == attestation.payload_hash,
+            VaultError::AttestationHashMismatch
+        );
         let now = Clock::get()?.unix_timestamp;
         require!(now <= attestation.exp, VaultError::AttestationExpired);
+
+        // H-1: claim unallocated treasury SOL (no second pull from user)
+        let rent_min = Rent::get()?.minimum_balance(8 + 1);
+        let vault_lamports = ctx.accounts.sol_vault.to_account_info().lamports();
+        let available = vault_lamports.saturating_sub(rent_min);
+        let unallocated = available.saturating_sub(v.total_assets);
+        require!(
+            unallocated >= amount,
+            VaultError::InsufficientUnallocatedSol
+        );
 
         let tokens = v.tokens_for_deposit(amount);
         require!(tokens > 0, VaultError::MathOverflow);
         require!(tokens >= min_tokens_out, VaultError::SlippageExceeded);
         let nav = v.nav_per_token();
-
-        system_program::transfer(
-            CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
-                system_program::Transfer {
-                    from: ctx.accounts.user.to_account_info(),
-                    to: ctx.accounts.sol_vault.to_account_info(),
-                },
-            ),
-            amount,
-        )?;
 
         let seeds = &[b"vault".as_ref(), &[v.bump]];
         token::mint_to(
@@ -374,56 +459,126 @@ pub mod chiller_vault {
         Ok(())
     }
 
-    /// Withdraw: burn $CHILLER → receive SOL
-    /// M-1 FIX: slippage protection via min_sol_out
-    pub fn withdraw(ctx: Context<WithdrawCtx>, tokens: u64, min_sol_out: u64) -> Result<()> {
-        let v = &ctx.accounts.vault;
-        // H-4 FIX: auto-unpause after 24 hours
-        if v.is_paused {
-            let elapsed = Clock::get()?.unix_timestamp - v.pause_timestamp;
-            require!(elapsed > 86400, VaultError::VaultPaused); // 24h auto-unpause
+    /// Legacy open withdraw — **disabled**. Compliance rail is `withdraw_with_attestation`.
+    pub fn withdraw(_ctx: Context<WithdrawCtx>, _tokens: u64, _min_sol_out: u64) -> Result<()> {
+        err!(VaultError::OpenWithdrawDeprecated)
+    }
+
+    /// Withdraw with authority co-sign (silent AML / ops gate off-chain before co-sign).
+    pub fn withdraw_with_attestation(
+        ctx: Context<WithdrawWithAttestationCtx>,
+        tokens: u64,
+        min_sol_out: u64,
+        attestation: WithdrawAttestationArgs,
+    ) -> Result<()> {
+        {
+            let v = &mut ctx.accounts.vault;
+            let now = Clock::get()?.unix_timestamp;
+            // After expiry, clear pause so withdrawals proceed and refresh-loop ends
+            if !v.clear_expired_pause(now) {
+                v.require_not_paused()?;
+            }
         }
+        let v = &ctx.accounts.vault;
         require!(tokens > 0, VaultError::ZeroAmount);
+        require!(
+            ctx.accounts.attestation_authority.key() == v.authority,
+            VaultError::AttestationUnauthorized
+        );
+        require!(
+            attestation.attested_wallet == ctx.accounts.user.key(),
+            VaultError::AttestationWalletMismatch
+        );
+        require!(
+            tokens == attestation.token_amount,
+            VaultError::AttestationAmountMismatch
+        );
+        let expected = withdraw_payload_hash(
+            &attestation.nonce,
+            &attestation.attested_wallet,
+            attestation.token_amount,
+            attestation.exp,
+        );
+        require!(
+            expected == attestation.payload_hash,
+            VaultError::AttestationHashMismatch
+        );
+        let now = Clock::get()?.unix_timestamp;
+        require!(now <= attestation.exp, VaultError::AttestationExpired);
+
         let gross = v.sol_for_withdrawal(tokens);
         require!(gross > 0, VaultError::MathOverflow);
         let fee = (gross as u128 * v.withdrawal_fee_bps as u128 / 10_000) as u64;
         let net = gross.checked_sub(fee).ok_or(VaultError::MathOverflow)?;
-        // M-1 FIX: slippage check — user specifies minimum acceptable SOL
         require!(net >= min_sol_out, VaultError::SlippageExceeded);
         let nav = v.nav_per_token();
 
-        // Check sol_vault has enough (above rent-exempt minimum)
-        let rent_min = Rent::get()?.minimum_balance(8 + 1); // SolTreasury size
-        let available = ctx.accounts.sol_vault.to_account_info().lamports()
-            .checked_sub(rent_min).unwrap_or(0);
+        let rent_min = Rent::get()?.minimum_balance(8 + 1);
+        let available = ctx
+            .accounts
+            .sol_vault
+            .to_account_info()
+            .lamports()
+            .checked_sub(rent_min)
+            .unwrap_or(0);
         require!(available >= gross, VaultError::InsufficientVaultBalance);
 
-        // Burn user's $CHILLER
-        token::burn(CpiContext::new(ctx.accounts.token_program.to_account_info(), Burn {
-            mint: ctx.accounts.chiller_mint.to_account_info(),
-            from: ctx.accounts.user_chiller.to_account_info(),
-            authority: ctx.accounts.user.to_account_info(),
-        }), tokens)?;
+        token::burn(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Burn {
+                    mint: ctx.accounts.chiller_mint.to_account_info(),
+                    from: ctx.accounts.user_chiller.to_account_info(),
+                    authority: ctx.accounts.user.to_account_info(),
+                },
+            ),
+            tokens,
+        )?;
 
-        // Transfer SOL: sol_vault → user (program-owned account, direct lamport ok)
         **ctx.accounts.sol_vault.to_account_info().try_borrow_mut_lamports()? -= net;
         **ctx.accounts.user.try_borrow_mut_lamports()? += net;
 
-        // Transfer fee SOL: sol_vault → team_wallet
         if fee > 0 {
             **ctx.accounts.sol_vault.to_account_info().try_borrow_mut_lamports()? -= fee;
             **ctx.accounts.team_wallet.try_borrow_mut_lamports()? += fee;
         }
 
+        let receipt = &mut ctx.accounts.withdraw_receipt;
+        receipt.nonce = attestation.nonce;
+        receipt.user = ctx.accounts.user.key();
+        receipt.amount = tokens;
+        receipt.tokens_minted = 0;
+        receipt.attested_at = now;
+        receipt.bump = ctx.bumps.withdraw_receipt;
+
         let v = &mut ctx.accounts.vault;
         v.total_assets = v.total_assets.checked_sub(gross).ok_or(VaultError::MathOverflow)?;
         v.total_supply = v.total_supply.checked_sub(tokens).ok_or(VaultError::MathOverflow)?;
         let day = (Clock::get()?.unix_timestamp / 86400) as u64;
-        if day != v.current_epoch { v.current_epoch = day; v.epoch_withdrawals = 0; }
-        v.epoch_withdrawals = v.epoch_withdrawals.checked_add(gross).ok_or(VaultError::MathOverflow)?;
-        if v.max_withdrawal_per_epoch > 0 { require!(v.epoch_withdrawals <= v.max_withdrawal_per_epoch, VaultError::EpochCapExceeded); }
+        if day != v.current_epoch {
+            v.current_epoch = day;
+            v.epoch_withdrawals = 0;
+        }
+        v.epoch_withdrawals = v
+            .epoch_withdrawals
+            .checked_add(gross)
+            .ok_or(VaultError::MathOverflow)?;
+        if v.max_withdrawal_per_epoch > 0 {
+            require!(
+                v.epoch_withdrawals <= v.max_withdrawal_per_epoch,
+                VaultError::EpochCapExceeded
+            );
+        }
 
-        emit!(UserWithdrew { user: ctx.accounts.user.key(), chiller_burned: tokens, sol_gross: gross, withdrawal_fee: fee, sol_returned: net, nav_at_withdrawal: nav, timestamp: Clock::get()?.unix_timestamp });
+        emit!(UserWithdrew {
+            user: ctx.accounts.user.key(),
+            chiller_burned: tokens,
+            sol_gross: gross,
+            withdrawal_fee: fee,
+            sol_returned: net,
+            nav_at_withdrawal: nav,
+            timestamp: Clock::get()?.unix_timestamp
+        });
         Ok(())
     }
 
@@ -432,6 +587,13 @@ pub mod chiller_vault {
     /// N-5 FIX: ceiling from stored state, NO perf fee here (realized-only at fund_vault)
     /// C-3 FIX: ±10% cap per update, 1h cooldown, real-assets ceiling
     pub fn update_nav(ctx: Context<UpdateNAVCtx>, new_vault_value: u64, new_drift_value: u64) -> Result<()> {
+        {
+            let v = &mut ctx.accounts.vault;
+            let now = Clock::get()?.unix_timestamp;
+            v.clear_expired_pause(now);
+            // F-07: pause is a treasury circuit breaker — no NAV mutation while paused
+            v.require_not_paused()?;
+        }
         let v = &ctx.accounts.vault;
         let new_effective = new_vault_value.saturating_add(new_drift_value);
 
@@ -454,10 +616,14 @@ pub mod chiller_vault {
             require!(diff <= max_change, VaultError::NavChangeTooLarge);
         }
 
-        // N-5b FIX: Ceiling uses drift_cost_basis (NOT assets_on_drift which we overwrite)
-        // cost_basis is only modified by drain_to_trade/fund_vault, never by update_nav
-        // This prevents compounding: Aₙ = A₀·1.1ⁿ attack via repeated update_nav calls
-        let real_balance = ctx.accounts.sol_vault.to_account_info().lamports();
+        // F-10: ceiling uses rent-adjusted treasury + cost basis (+10% trading headroom)
+        let rent_min = Rent::get()?.minimum_balance(8 + 1);
+        let real_balance = ctx
+            .accounts
+            .sol_vault
+            .to_account_info()
+            .lamports()
+            .saturating_sub(rent_min);
         let max_nav = real_balance
             .saturating_add(v.drift_cost_basis)
             .saturating_add(v.drift_cost_basis / 10); // +10% for real trading gains
@@ -466,15 +632,15 @@ pub mod chiller_vault {
         let old_nav = v.nav_per_token();
 
         // N-5 FIX: NO performance fee in update_nav
-        // Perf fee is only charged on REALIZED profit in fund_vault
-        // This prevents extracting real SOL from unrealized mark-to-market gains
-
-        // N-4 FIX: Update both fields directly (mark-to-market)
+        // F-06: do NOT raise high_water_mark on unrealized marks — fee HWM only at fund_vault
         let v = &mut ctx.accounts.vault;
         v.total_assets = new_vault_value;
         v.assets_on_drift = new_drift_value;
+        // F-06: mark-down reconciles stale cost basis so later returns aren't treated as principal
+        if new_drift_value < v.drift_cost_basis {
+            v.drift_cost_basis = new_drift_value;
+        }
         v.last_nav_update = now;
-        if new_effective > v.high_water_mark { v.high_water_mark = new_effective; }
         let new_nav = v.nav_per_token();
 
         msg!("📊 NAV updated: vault={} drift={} effective={} nav={}", 
@@ -487,6 +653,13 @@ pub mod chiller_vault {
     /// C-1 FIX: sends to whitelisted trade_wallet, NOT authority
     /// C-4 FIX: limit based on real vault balance
     pub fn drain_to_trade(ctx: Context<DrainCtx>, amount: u64) -> Result<()> {
+        {
+            let v = &mut ctx.accounts.vault;
+            let now = Clock::get()?.unix_timestamp;
+            v.clear_expired_pause(now);
+            // F-07: emergency pause blocks treasury movement to trade wallet
+            v.require_not_paused()?;
+        }
         require!(amount > 0, VaultError::ZeroAmount);
         // C-1: trade_wallet verified by DrainCtx address constraint
 
@@ -534,6 +707,13 @@ pub mod chiller_vault {
     /// C-1 FIX: credits total_assets back, reduces assets_on_drift
     /// N-5 FIX: perf fee charged here on REALIZED profit only
     pub fn fund_vault(ctx: Context<FundCtx>, amount: u64) -> Result<()> {
+        {
+            let v = &mut ctx.accounts.vault;
+            let now = Clock::get()?.unix_timestamp;
+            v.clear_expired_pause(now);
+            // F-07: pause blocks fund/accounting mutation
+            v.require_not_paused()?;
+        }
         require!(amount > 0, VaultError::ZeroAmount);
 
         system_program::transfer(
@@ -555,13 +735,15 @@ pub mod chiller_vault {
         // Reduce cost basis by what was "returned"
         v.drift_cost_basis = v.drift_cost_basis.saturating_sub(cost_consumed);
 
-        // Performance fee ONLY on realized profit AND only if above HWM
+        // Performance fee ONLY on realized profit above high-water mark (F-06)
         let mut pfee: u64 = 0;
         let post_fund_effective = v.total_assets.saturating_add(amount).saturating_add(
             v.assets_on_drift.saturating_sub(amount)
         );
-        if realized_profit > 0 && v.performance_fee_bps > 0 && post_fund_effective > v.high_water_mark {
-            pfee = (realized_profit as u128 * v.performance_fee_bps as u128 / 10_000) as u64;
+        let above_hwm = post_fund_effective.saturating_sub(v.high_water_mark);
+        let fee_base = realized_profit.min(above_hwm);
+        if fee_base > 0 && v.performance_fee_bps > 0 {
+            pfee = (fee_base as u128 * v.performance_fee_bps as u128 / 10_000) as u64;
             // Transfer perf fee: sol_vault → team_wallet
             let sol_vault_info = ctx.accounts.sol_vault.to_account_info();
             let rent_min = Rent::get()?.minimum_balance(8 + 1);
@@ -599,19 +781,23 @@ pub mod chiller_vault {
     }
 
     /// Emergency pause / unpause
-    /// H-4 FIX: records pause_timestamp, can't re-pause within 24h
+    /// F-08: cannot refresh an active pause; after 24h pause auto-expires on next check
     pub fn set_paused(ctx: Context<SetPausedCtx>, paused: bool) -> Result<()> {
         let v = &mut ctx.accounts.vault;
         let now = Clock::get()?.unix_timestamp;
-        // H-4 FIX: prevent re-pause within 24h (stops infinite freeze)
-        if paused && v.pause_timestamp > 0 {
-            require!(now - v.pause_timestamp >= 86400, VaultError::PauseCooldown);
-        }
-        v.is_paused = paused;
+        v.clear_expired_pause(now);
         if paused {
+            // Must be unpaused (or freshly expired) before a new pause — no timestamp refresh loop
+            require!(!v.is_paused, VaultError::AlreadyPaused);
+            if v.pause_timestamp > 0 {
+                require!(now - v.pause_timestamp >= 86400, VaultError::PauseCooldown);
+            }
+            v.is_paused = true;
             v.pause_timestamp = now;
+        } else {
+            v.is_paused = false;
         }
-        emit!(VaultPausedEvt { paused, authority: ctx.accounts.authority.key(), timestamp: now });
+        emit!(VaultPausedEvt { paused: v.is_paused, authority: ctx.accounts.authority.key(), timestamp: now });
         Ok(())
     }
 
@@ -755,6 +941,36 @@ pub struct WithdrawCtx<'info> {
     #[account(mut, address = vault.team_wallet)]
     pub team_wallet: AccountInfo<'info>,
     pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+#[instruction(tokens: u64, min_sol_out: u64, attestation: WithdrawAttestationArgs)]
+pub struct WithdrawWithAttestationCtx<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub attestation_authority: Signer<'info>,
+    #[account(mut, seeds = [b"vault"], bump = vault.bump)]
+    pub vault: Account<'info, VaultState>,
+    #[account(mut, address = vault.chiller_mint)]
+    pub chiller_mint: Account<'info, Mint>,
+    /// CHECK: SOL treasury
+    #[account(mut, seeds = [b"sol-vault"], bump = vault.sol_vault_bump)]
+    pub sol_vault: AccountInfo<'info>,
+    #[account(mut, token::mint = vault.chiller_mint, token::authority = user)]
+    pub user_chiller: Account<'info, anchor_spl::token::TokenAccount>,
+    /// CHECK: team wallet
+    #[account(mut, address = vault.team_wallet)]
+    pub team_wallet: AccountInfo<'info>,
+    #[account(
+        init,
+        payer = user,
+        space = 8 + AttestationReceipt::INIT_SPACE,
+        seeds = [b"wd-attestation", attestation.nonce.as_ref()],
+        bump
+    )]
+    pub withdraw_receipt: Account<'info, AttestationReceipt>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]

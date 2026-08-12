@@ -6,7 +6,7 @@
 
 1. **Connect** — wallet KYT once for UX (show/hide deposit). Neutral deny modal only on hard block.
 2. **Every deposit / top-up** — silent AML again (wallet + inbound tx / source). No extra “checking” toast; stay on “Processing…”.
-3. **Every withdraw** — silent AML on destination wallet **before** payout. Same: no extra notifications.
+3. **Every withdraw** — silent AML on destination wallet **before** payout. Same: no extra notifications. On-chain payout requires `withdraw_with_attestation` (authority co-sign); open `withdraw` is deprecated and rejects.
 4. **On deny at tx time** — no mint / no payout; deposit path → quarantine → full refund; withdraw → blocked, funds stay in vault shares. User sees only status / refund_txid if relevant — not risk scores.
 5. **Incidents** — every deny / review / timeout / breaker hit written to `incidents` (ops only).
 6. **Full user audit** — log connect, disconnect, eligibility results (decision only in UI cache; reason_code internal), deposits, withdraws, attestation issue/spend, refunds, support contacts. Wallet binding is first-class.

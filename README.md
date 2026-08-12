@@ -136,7 +136,9 @@ anchor test
 SPA for vault interaction (demo/live wiring depends on deployment).
 
 - NAV / portfolio view
-- Deposit SOL / withdraw $CHILLER
+- Deposit SOL / withdraw $CHILLER (attested mint UX; open deposit disabled)
+- Trades tab reads `data/onchain-trades.json` (empty in demo until vault `log_trade` is live — **no yield promises**)
+- Network badge defaults to **DEMO**
 - Multi-wallet: Phantom, Solflare, Backpack
 - Responsive layout
 

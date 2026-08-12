@@ -5,6 +5,7 @@
   "allowed_top_level": [
     "README.md",
     "LICENSE",
+    "SECURITY.md",
     ".gitignore",
     "assets",
     "docs",
@@ -99,6 +100,31 @@
       "id": "bybit_key_assign",
       "regex": "(BYBIT_(API_)?(KEY|SECRET)|bybit_api_(key|secret))\\s*[:=]\\s*['\\\"][^'\\\"]+['\\\"]",
       "message": "Bybit API credential assignment"
+    },
+    {
+      "id": "ipv4_publicish",
+      "regex": "\\b(?!127\\.|10\\.|0\\.|192\\.168\\.|172\\.(1[6-9]|2\\d|3[01])\\.)(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\b",
+      "message": "Public IPv4 address literal — infrastructure topology leak"
+    },
+    {
+      "id": "ssh_port_flag",
+      "regex": "\\b(ssh|scp)\\b[^\\n]{0,80}\\s-(p|P)\\s*\\d{2,5}\\b",
+      "message": "SSH/SCP with explicit port — infrastructure topology leak"
+    },
+    {
+      "id": "user_at_ipv4",
+      "regex": "\\b[A-Za-z0-9._-]+@(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\b",
+      "message": "user@IPv4 deploy target — infrastructure topology leak"
+    },
+    {
+      "id": "remote_opt_path",
+      "regex": "['\\\"]\\/opt\\/[A-Za-z0-9._/-]+['\\\"]|REMOTE_BASE\\s*=\\s*['\\\"]?\\/opt\\/",
+      "message": "Hardcoded /opt remote path assignment — infrastructure topology leak"
+    },
+    {
+      "id": "ssh_key_home_path",
+      "regex": "~\\/\\.ssh\\/[A-Za-z0-9._-]+|\\$HOME\\/\\.ssh\\/[A-Za-z0-9._-]+",
+      "message": "SSH private key path in public tree"
     }
   ],
   "content_warn_patterns": [
@@ -108,22 +134,11 @@
       "message": "Marketing may over-promise yield \u2014 align with no yield promise"
     },
     {
-      "id": "drift_as_primary",
-      "regex": "trading bots generate yield through perpetual futures on \\[?Drift",
-      "message": "README still Drift-first; product direction is Bybit sleeve"
-    },
-    {
       "id": "api_key_param",
       "regex": "api_key\\s*[:=]",
       "message": "Mentions api_key \u2014 verify no real secret"
-    },
-    {
-      "id": "trading_architecture",
-      "regex": "(vault_bridge|Soldier|Insider bot|scalper-pro|IIE)",
-      "message": "Trading-system naming in public surface"
     }
-  ],
-  "skip_dirs": [
+  ],  "skip_dirs": [
     ".git",
     "node_modules",
     "target",

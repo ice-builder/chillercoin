@@ -1,111 +1,43 @@
-# ═══════════════════════════════════════════
-# $CHILLER — NEVER commit these files
-# ═══════════════════════════════════════════
+# ChillerCoin public repository — minimal ignore list
+# Do not list private monorepo / trading-engine paths here (metadata leak).
 
-# ─── Solana Keys (CRITICAL) ───────────────
-**/id.json
-**/*-keypair.json
-*.json.bak
-*.wallet
-
-# ─── Environment / Secrets ────────────────
+# Secrets / keys
 .env
 .env.*
 !.env.example
-.env.local
-.env.production
+.deploy.env
+**/.deploy.env
+**/*-keypair.json
+**/id.json
+*.pem
+*.key
+*.wallet
 secrets.*
 config.local.*
 
-# ─── SSH Keys ─────────────────────────────
-*.pem
-*.key
-
-# ─── Build Artifacts ──────────────────────
+# Build / deps
 target/
 node_modules/
 dist/
 build/
-*.so
-test-ledger/
 .anchor/
+test-ledger/
+*.so
 
-# ─── Python ───────────────────────────────
+# Python / local
 __pycache__/
 *.pyc
-*.pyo
-*.pkl
-*.db
-*.sqlite3
 .venv/
 venv/
+*.db
+*.sqlite3
 
-# ─── Logs & Runtime ──────────────────────
-*.log
-trade_log.jsonl
-trade_signals.json
-
-# ─── OS ───────────────────────────────────
+# OS / IDE
 .DS_Store
 Thumbs.db
-*.swp
-*~
-
-# ─── IDE ──────────────────────────────────
 .vscode/
 .idea/
-*.iml
 
-# ─── Private / Internal (NOT for public GitHub) ──
-chiller-landing/
-chiller-tg-bot/
-vault/
-ZeroChainAI/
-liquidation-hunter-bot/
-# Private monorepo leftovers (root only — do not ignore program src/)
-/src/
-/deploy_vps/
-/data/
-/artifacts/
-dashboard/
-landing/
-deepprotect/
-deepprotect-commercial-package/
-command-center/
-easytrener/
-meaning-map/
-oneprop-investor-package/
-testing-platform-ru/
-PoleznoEst/
-.local_ai/
-.streamlit/
-.gemini_tmp/
-.pytest_cache/
-demo_data.csv
-catalog.json
-pyproject.toml
-HOW_TO_USE.md
-USER_GUIDE.md
-PROJECT_STATUS.md
-ROADMAP.md
-*.parquet
-*.csv
-patch_executor.py
-fix_executor.py
-hl_mirror.py
-update_grafana.py
-package.json
-package-lock.json
-
-# ─── Trading / private (never public) ─────
-**/vault_bridge.py
-**/drift_executor.py
-**/exchange_adapter.py
-**/*_mirror.py
-**/debug_pd.ts
-chiller-tg-bot/
-**/telegram*/
-**/*tg*bot*
-
-# ─── Push-gate reports ────────────────────
-scripts/reports/
+# Logs / runtime
+*.log
+reports/

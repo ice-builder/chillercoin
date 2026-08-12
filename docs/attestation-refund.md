@@ -21,10 +21,21 @@ or `HOLD_MANUAL` / `PAUSED` (ops / circuit breaker)
 
 ## Attestation rules
 
-- Binds `wallet`, `amount`, `deposit_txid`, `nav`, `shares`, `nonce`, `exp`  
-- TTL 15–30 minutes, single-use (`spent` after mint)  
-- Fail-closed: missing / bad / expired attestation → no mint  
+On-chain mint uses **authority co-sign** (`mint_with_attestation`), not a detached HMAC blob.
+
+**Bound on-chain (AttestationArgs + ix args):**
+- `nonce` (32 bytes, single-use receipt PDA)
+- `attested_wallet`
+- `amount_lamports` (must equal mint `amount`)
+- `exp`
+- `payload_hash` = `sha256(nonce ‖ wallet ‖ amount_le ‖ exp_le)`
+
+**Off-chain paper ticket (ops DB only)** may also record `deposit_txid`, `nav`, `shares` for audit — those fields are **not** independently verified by the program. NAV/shares for mint are derived from live vault state at mint time.
+
+- TTL typically 15–30 minutes; single-use (`spent` after mint / PDA collision on replay)
+- Fail-closed: missing / bad / expired / amount mismatch → no mint
 - Each top-up is a **new** deposit (re-screen)
+- Withdrawals use `withdraw_with_attestation` (open `withdraw` is deprecated)
 
 ## Refund policy
 

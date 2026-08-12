@@ -24,6 +24,19 @@ const CONFIG = {
   attestationTtlSec: 20 * 60,
 };
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function isDemoMode() {
+  return CONFIG.network === 'demo';
+}
+
 // ═══════════════════════════════════════════════
 // State
 // ═══════════════════════════════════════════════
@@ -390,18 +403,18 @@ function renderDepositActivity() {
     .reverse()
     .map((d) => {
       const steps = (d.history || []).map((h) =>
-        `<li class="deposit-step"><span class="deposit-step-state">${h.state}</span><span class="deposit-step-note">${h.note || ''}</span></li>`
+        `<li class="deposit-step"><span class="deposit-step-state">${escapeHtml(h.state)}</span><span class="deposit-step-note">${escapeHtml(h.note || '')}</span></li>`
       ).join('');
       const refund = d.refund_txid
-        ? `<div class="deposit-refund">Refund tx: <code>${d.refund_txid}</code></div>`
+        ? `<div class="deposit-refund">Refund tx: <code>${escapeHtml(d.refund_txid)}</code></div>`
         : '';
       const att = d.attestation?.nonce
-        ? `<div class="deposit-refund">Attestation: <code>${d.attestation.nonce}</code></div>`
+        ? `<div class="deposit-refund">Attestation: <code>${escapeHtml(d.attestation.nonce)}</code></div>`
         : '';
-      return `<article class="deposit-item" data-state="${d.state}">
+      return `<article class="deposit-item" data-state="${escapeHtml(d.state)}">
         <div class="deposit-item-head">
-          <strong>Deposit ${d.id}</strong>
-          <span>${d.amount} SOL → <em>${d.state}</em></span>
+          <strong>Deposit ${escapeHtml(d.id)}</strong>
+          <span>${escapeHtml(d.amount)} SOL → <em>${escapeHtml(d.state)}</em></span>
         </div>
         <ol class="deposit-steps">${steps}</ol>
         ${att}${refund}
@@ -413,12 +426,12 @@ function renderDepositActivity() {
     .reverse()
     .map((w) => {
       const steps = (w.history || [{ state: w.state, note: '' }]).map((h) =>
-        `<li class="deposit-step"><span class="deposit-step-state">${h.state}</span><span class="deposit-step-note">${h.note || ''}</span></li>`
+        `<li class="deposit-step"><span class="deposit-step-state">${escapeHtml(h.state)}</span><span class="deposit-step-note">${escapeHtml(h.note || '')}</span></li>`
       ).join('');
-      return `<article class="deposit-item" data-state="${w.state}">
+      return `<article class="deposit-item" data-state="${escapeHtml(w.state)}">
         <div class="deposit-item-head">
-          <strong>Withdraw ${w.id}</strong>
-          <span>${w.amount} $CHILLER → <em>${w.state}</em></span>
+          <strong>Withdraw ${escapeHtml(w.id)}</strong>
+          <span>${escapeHtml(w.amount)} $CHILLER → <em>${escapeHtml(w.state)}</em></span>
         </div>
         <ol class="deposit-steps">${steps}</ol>
       </article>`;
@@ -565,10 +578,22 @@ async function executeDeposit() {
   DEMO_VAULT.totalSupply += tokens;
   document.getElementById('deposit-amount').value = '';
   document.getElementById('deposit-receive').textContent = '0 $CHILLER';
-  audit('deposit_minted', { deposit_id: dep.id, tokens, mint_path: CONFIG.mintPath });
+  audit('deposit_minted', {
+    deposit_id: dep.id,
+    tokens,
+    mint_path: CONFIG.mintPath,
+    paper: isDemoMode(),
+  });
   updateUserUI();
   updateVaultStats();
-  showToast(`Deposited ${amount} SOL → ${tokens} $CHILLER`, 'success');
+  if (isDemoMode()) {
+    showToast(
+      `DEMO paper only — simulated ${amount} SOL → ${tokens} $CHILLER (not on-chain)`,
+      'info'
+    );
+  } else {
+    showToast(`Deposited ${amount} SOL → ${tokens} $CHILLER`, 'success');
+  }
 }
 
 async function fetchUserBalances() {
@@ -773,7 +798,14 @@ async function executeWithdraw() {
   updateVaultStats();
   document.getElementById('withdraw-amount').value = '';
   document.getElementById('withdraw-receive').textContent = '0 SOL';
-  showToast(`Withdrew ${tokens} $CHILLER → ${net.toFixed(4)} SOL`, 'success');
+  if (isDemoMode()) {
+    showToast(
+      `DEMO paper only — simulated ${tokens} $CHILLER → ${net.toFixed(4)} SOL (not on-chain)`,
+      'info'
+    );
+  } else {
+    showToast(`Withdrew ${tokens} $CHILLER → ${net.toFixed(4)} SOL`, 'success');
+  }
 }
 
 async function simulateRejectedWithdraw() {
@@ -881,18 +913,21 @@ function tradeRow(t) {
   const pnl = (t.pnl_bps / 100).toFixed(2);
   const dur = formatDuration(t.duration);
   const time = formatTime(t.time);
-  const icon = PAIR_ICONS[t.pair] || '•';
-  const txShort = t.tx ? (t.tx.slice(0, 8) + '…' + t.tx.slice(-4)) : '—';
-  const txCell = t.tx
-    ? `<a class="tx-link" href="${CONFIG.explorerBase}${t.tx}${CONFIG.explorerSuffix}" target="_blank" rel="noopener">${txShort}</a>`
+  const pair = escapeHtml(t.pair);
+  const side = escapeHtml(t.side);
+  const icon = escapeHtml(PAIR_ICONS[t.pair] || '•');
+  const safeTx = /^[1-9A-HJ-NP-Za-km-z]{32,88}$/.test(String(t.tx || '')) ? t.tx : '';
+  const txShort = safeTx ? escapeHtml(safeTx.slice(0, 8) + '…' + safeTx.slice(-4)) : '—';
+  const txCell = safeTx
+    ? `<a class="tx-link" href="${escapeHtml(CONFIG.explorerBase)}${escapeHtml(safeTx)}${escapeHtml(CONFIG.explorerSuffix)}" target="_blank" rel="noopener">${txShort}</a>`
     : '—';
 
   return `<tr>
-    <td><div class="pair-cell"><span class="pair-icon">${icon}</span>${t.pair}</div></td>
-    <td><span class="side-badge ${t.side.toLowerCase()}">${t.side}</span></td>
-    <td><span class="pnl-cell ${isWin ? 'profit' : 'loss'}">${isWin ? '+' : ''}${pnl}%</span></td>
-    <td>${dur}</td>
-    <td>${time}</td>
+    <td><div class="pair-cell"><span class="pair-icon">${icon}</span>${pair}</div></td>
+    <td><span class="side-badge ${side.toLowerCase()}">${side}</span></td>
+    <td><span class="pnl-cell ${isWin ? 'profit' : 'loss'}">${isWin ? '+' : ''}${escapeHtml(pnl)}%</span></td>
+    <td>${escapeHtml(dur)}</td>
+    <td>${escapeHtml(time)}</td>
     <td>${txCell}</td>
   </tr>`;
 }
@@ -902,24 +937,27 @@ function tradeRowFull(t) {
   const pnl = (t.pnl_bps / 100).toFixed(2);
   const dur = formatDuration(t.duration);
   const time = formatTime(t.time);
-  const icon = PAIR_ICONS[t.pair] || '•';
+  const pair = escapeHtml(t.pair);
+  const side = escapeHtml(t.side);
+  const icon = escapeHtml(PAIR_ICONS[t.pair] || '•');
   const nav = getCurrentNAV();
-  const txShort = t.tx ? (t.tx.slice(0, 8) + '…' + t.tx.slice(-4)) : '—';
-  const txCell = t.tx
-    ? `<a class="tx-link" href="${CONFIG.explorerBase}${t.tx}${CONFIG.explorerSuffix}" target="_blank" rel="noopener">${txShort}</a>`
+  const safeTx = /^[1-9A-HJ-NP-Za-km-z]{32,88}$/.test(String(t.tx || '')) ? t.tx : '';
+  const txShort = safeTx ? escapeHtml(safeTx.slice(0, 8) + '…' + safeTx.slice(-4)) : '—';
+  const txCell = safeTx
+    ? `<a class="tx-link" href="${escapeHtml(CONFIG.explorerBase)}${escapeHtml(safeTx)}${escapeHtml(CONFIG.explorerSuffix)}" target="_blank" rel="noopener">${txShort}</a>`
     : '—';
   const entry = Number(t.entry || 0);
   const exit = Number(t.exit || 0);
 
   return `<tr>
-    <td><div class="pair-cell"><span class="pair-icon">${icon}</span>${t.pair}</div></td>
-    <td><span class="side-badge ${t.side.toLowerCase()}">${t.side}</span></td>
-    <td style="font-family:var(--font-mono)">$${entry.toLocaleString(undefined,{maximumFractionDigits:4})}</td>
-    <td style="font-family:var(--font-mono)">$${exit.toLocaleString(undefined,{maximumFractionDigits:4})}</td>
-    <td><span class="pnl-cell ${isWin ? 'profit' : 'loss'}">${isWin ? '+' : ''}${pnl}%</span></td>
-    <td>${dur}</td>
-    <td style="font-family:var(--font-mono)">${nav.toFixed(4)}</td>
-    <td>${time}</td>
+    <td><div class="pair-cell"><span class="pair-icon">${icon}</span>${pair}</div></td>
+    <td><span class="side-badge ${side.toLowerCase()}">${side}</span></td>
+    <td style="font-family:var(--font-mono)">$${escapeHtml(entry.toLocaleString(undefined,{maximumFractionDigits:4}))}</td>
+    <td style="font-family:var(--font-mono)">$${escapeHtml(exit.toLocaleString(undefined,{maximumFractionDigits:4}))}</td>
+    <td><span class="pnl-cell ${isWin ? 'profit' : 'loss'}">${isWin ? '+' : ''}${escapeHtml(pnl)}%</span></td>
+    <td>${escapeHtml(dur)}</td>
+    <td style="font-family:var(--font-mono)">${escapeHtml(nav.toFixed(4))}</td>
+    <td>${escapeHtml(time)}</td>
     <td>${txCell}</td>
   </tr>`;
 }

@@ -7,7 +7,8 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "ts-mocha -p ./tsconfig.json -t 1000000 tests/attestation_bankrun.ts",
+    "test:bankrun": "ts-mocha -p ./tsconfig.json -t 1000000 tests/attestation_bankrun.ts"
   },
   "keywords": [],
   "author": "",

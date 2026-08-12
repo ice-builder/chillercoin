@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>$CHILLER Dashboard — Vault Management</title>
     <meta name="description" content="Manage your $CHILLER vault: deposit SOL, withdraw, track NAV. No yield promises.">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; frame-ancestors 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' https://api.devnet.solana.com https://*.solana.com https://solscan.io; form-action 'self'">
     <link rel="stylesheet" href="style.css">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧊</text></svg>">
 </head>
@@ -156,7 +157,8 @@
                             <span>Attested only</span>
                         </div>
                         <p class="eligibility-copy" style="margin:10px 0 0;font-size:12px;opacity:.75">
-                            Open deposit is disabled. Shares mint only after transfer checks (paper demo).
+                            DEMO paper mode — balances and mints here are simulated, not on-chain.
+                            Open deposit is disabled; live shares mint only via attestation after transfer checks.
                         </p>
                         <button class="submit-btn deposit" id="btn-deposit" onclick="executeDeposit()" disabled>
                             Connect Wallet
