@@ -11,7 +11,8 @@
     "docs",
     "scripts",
     "chiller-dashboard",
-    "chiller-vault"
+    "chiller-vault",
+    ".github"
   ],
   "path_block_globs": [
     "**/vault_bridge.py",
@@ -138,7 +139,8 @@
       "regex": "api_key\\s*[:=]",
       "message": "Mentions api_key \u2014 verify no real secret"
     }
-  ],  "skip_dirs": [
+  ],
+  "skip_dirs": [
     ".git",
     "node_modules",
     "target",
@@ -153,7 +155,11 @@
   "skip_content_globs": [
     "scripts/public-push-policy.json",
     "scripts/public-push-audit.mjs",
-    "scripts/reports/**"
+    "scripts/reports/**",
+    "**/*.so",
+    "**/*.png",
+    "**/*.jpg",
+    "**/*.wasm"
   ],
   "max_file_bytes_for_content_scan": 1500000
 }

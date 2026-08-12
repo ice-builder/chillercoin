@@ -23,6 +23,7 @@ build/
 .anchor/
 test-ledger/
 *.so
+!chiller-vault/tests/fixtures/*.so
 
 # Python / local
 __pycache__/

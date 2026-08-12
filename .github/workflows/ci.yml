@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  boundary:
+    name: Public push gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Scan public tree
+        run: node scripts/public-push-audit.mjs
+
+  dashboard:
+    name: Dashboard syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check app.js
+        run: node --check chiller-dashboard/app.js
+
+  bankrun:
+    name: Vault bankrun
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chiller-vault
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: chiller-vault/package-lock.json
+      - name: Require BPF fixture
+        run: test -f tests/fixtures/chiller_vault.so
+      - name: Install deps
+        run: npm ci
+      - name: Bankrun attestation suite
+        run: npm test
