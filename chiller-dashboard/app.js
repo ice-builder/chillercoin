@@ -26,12 +26,16 @@ const CONFIG = {
 const STATE = {
   wallet: null,
   walletAddress: null,
+  walletProvider: null,
   connected: false,
+  eligible: false,
+  eligibilityStatus: 'idle', // idle | checking | allow | deny
   vaultData: null,
   userSolBalance: 0,
   userChillerBalance: 0,
   navHistory: [],
   trades: [],
+  deposits: [],
   theme: 'dark',
 };
 
@@ -75,14 +79,17 @@ async function connectWallet() {
     STATE.connected = false;
     STATE.walletAddress = null;
     STATE.walletProvider = null;
+    STATE.eligible = false;
+    STATE.eligibilityStatus = 'idle';
+    STATE.deposits = [];
     btn.className = 'connect-btn';
     btn.textContent = '🔗 Connect Wallet';
     document.getElementById('stat-balance').textContent = '—';
     document.getElementById('stat-balance-sol').textContent = 'Connect wallet';
-    document.getElementById('btn-deposit').disabled = true;
-    document.getElementById('btn-deposit').textContent = 'Connect Wallet';
+    setDepositActionsEnabled(false, 'Connect Wallet');
     document.getElementById('btn-withdraw').disabled = true;
     document.getElementById('btn-withdraw').textContent = 'Connect Wallet';
+    renderDepositActivity();
     showToast('Wallet disconnected', 'info');
     return;
   }
@@ -143,23 +150,28 @@ async function connectSpecificWallet(type) {
   closeWalletModal();
   const btn = document.getElementById('connect-btn');
 
-  if (type === 'demo') {
-    STATE.walletAddress = 'Demo' + Math.random().toString(36).substr(2, 6) + '...';
-    STATE.walletProvider = 'demo';
+  if (type === 'demo' || type === 'demo-deny') {
+    const deny = type === 'demo-deny';
+    STATE.walletAddress = deny
+      ? 'DemoDeny' + Math.random().toString(36).substr(2, 5) + '…'
+      : 'Demo' + Math.random().toString(36).substr(2, 6) + '…';
+    STATE.walletProvider = type;
     STATE.connected = true;
     STATE.userSolBalance = 24.5;
-    STATE.userChillerBalance = 500;
+    STATE.userChillerBalance = deny ? 0 : 500;
     btn.className = 'connect-btn connected';
     btn.textContent = '';
     const dot1 = document.createElement('span');
     dot1.className = 'wallet-dot';
     btn.appendChild(dot1);
     btn.appendChild(document.createTextNode('🧊 ' + STATE.walletAddress));
-    updateUserUI();
-    // L-02: Show demo data indicator
     const badge = document.getElementById('network-badge');
-    if (badge) { badge.textContent = '⚠️ DEMO'; badge.style.background = 'rgba(245,158,11,0.15)'; badge.style.color = '#f59e0b'; }
-    showToast('🧊 Demo mode — explore without a wallet', 'success');
+    if (badge) {
+      badge.textContent = '⚠️ DEMO';
+      badge.style.background = 'rgba(245,158,11,0.15)';
+      badge.style.color = '#f59e0b';
+    }
+    await runEligibilityCheck({ forceDeny: deny });
     return;
   }
 
@@ -194,13 +206,178 @@ async function connectSpecificWallet(type) {
     btn.appendChild(document.createTextNode(walletInfo.icon + ' ' + short));
 
     await fetchUserBalances();
-    updateUserUI();
-    showToast(`✅ ${walletInfo.name} connected: ${short}`, 'success');
-
+    await runEligibilityCheck();
   } catch (err) {
     console.error('Wallet connect error:', err);
     showToast('❌ ' + (err.message || 'Connection rejected'), 'error');
   }
+}
+
+// ═══════════════════════════════════════════════
+// Paper KYT / eligibility + deposit state machine
+// ═══════════════════════════════════════════════
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function setDepositActionsEnabled(enabled, depositLabel) {
+  const dep = document.getElementById('btn-deposit');
+  const rej = document.getElementById('btn-paper-reject');
+  if (dep) {
+    dep.disabled = !enabled;
+    if (depositLabel) dep.textContent = depositLabel;
+  }
+  if (rej) rej.disabled = !enabled;
+}
+
+/** Mock KYT: paper only. Never shows scores/reason codes in UI. */
+function mockKytDecision(wallet, { forceDeny = false } = {}) {
+  if (forceDeny) return 'deny';
+  if (!wallet) return 'deny';
+  if (/deny/i.test(wallet)) return 'deny';
+  return 'allow';
+}
+
+async function runEligibilityCheck(opts = {}) {
+  STATE.eligibilityStatus = 'checking';
+  STATE.eligible = false;
+  setDepositActionsEnabled(false, 'Checking…');
+  document.getElementById('btn-withdraw').disabled = true;
+  document.getElementById('btn-withdraw').textContent = 'Checking…';
+  renderDepositActivity();
+  document.getElementById('eligibility-checking')?.classList.add('show');
+
+  await sleep(900);
+  const decision = mockKytDecision(STATE.walletAddress, opts);
+  document.getElementById('eligibility-checking')?.classList.remove('show');
+
+  if (decision === 'allow') {
+    STATE.eligible = true;
+    STATE.eligibilityStatus = 'allow';
+    updateUserUI();
+    showToast('Eligibility OK — deposit unlocked', 'success');
+  } else {
+    STATE.eligible = false;
+    STATE.eligibilityStatus = 'deny';
+    setDepositActionsEnabled(false, 'Unavailable');
+    document.getElementById('btn-withdraw').disabled = true;
+    document.getElementById('btn-withdraw').textContent = 'Unavailable';
+    renderDepositActivity();
+    openEligibilityModal();
+  }
+}
+
+function openEligibilityModal() {
+  document.getElementById('eligibility-modal')?.classList.add('show');
+}
+
+function closeEligibilityModal(event) {
+  if (event && event.target !== event.currentTarget) return;
+  document.getElementById('eligibility-modal')?.classList.remove('show');
+}
+
+function disconnectDueToIneligible() {
+  closeEligibilityModal();
+  if (STATE.connected) connectWallet();
+}
+
+function newDepositId() {
+  return 'dep_' + Math.random().toString(36).slice(2, 10);
+}
+
+function fakeTxid(prefix) {
+  return prefix + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 8);
+}
+
+function renderDepositActivity() {
+  const badge = document.getElementById('eligibility-badge');
+  const empty = document.getElementById('deposit-activity-empty');
+  const timeline = document.getElementById('deposit-timeline');
+  if (!badge || !empty || !timeline) return;
+
+  const map = {
+    idle: 'Not connected',
+    checking: 'Checking…',
+    allow: 'Eligible',
+    deny: 'Unavailable',
+  };
+  badge.textContent = map[STATE.eligibilityStatus] || STATE.eligibilityStatus;
+  badge.dataset.status = STATE.eligibilityStatus;
+
+  if (!STATE.deposits.length) {
+    timeline.hidden = true;
+    empty.hidden = false;
+    if (STATE.eligibilityStatus === 'deny') {
+      empty.textContent = 'This wallet cannot use the vault under our compliance policy. Deposit UI stays locked.';
+    } else if (STATE.eligibilityStatus === 'allow') {
+      empty.textContent = 'No deposits yet. Deposit SOL or run a paper rejected-deposit simulation.';
+    } else {
+      empty.textContent = 'Connect a wallet to run eligibility screening. Paper mode can simulate mint or full refund.';
+    }
+    return;
+  }
+
+  empty.hidden = true;
+  timeline.hidden = false;
+  timeline.innerHTML = STATE.deposits
+    .slice()
+    .reverse()
+    .map((d) => {
+      const steps = (d.history || []).map((h) =>
+        `<li class="deposit-step"><span class="deposit-step-state">${h.state}</span><span class="deposit-step-note">${h.note || ''}</span></li>`
+      ).join('');
+      const refund = d.refund_txid
+        ? `<div class="deposit-refund">Refund tx: <code>${d.refund_txid}</code></div>`
+        : '';
+      return `<article class="deposit-item" data-state="${d.state}">
+        <div class="deposit-item-head">
+          <strong>${d.id}</strong>
+          <span>${d.amount} SOL → <em>${d.state}</em></span>
+        </div>
+        <ol class="deposit-steps">${steps}</ol>
+        ${refund}
+      </article>`;
+    })
+    .join('');
+}
+
+async function advancePaperDeposit(dep, states) {
+  for (const step of states) {
+    dep.state = step.state;
+    dep.history.push({ state: step.state, note: step.note || '', at: Date.now() });
+    if (step.refund_txid) dep.refund_txid = step.refund_txid;
+    if (step.shares != null) dep.shares = step.shares;
+    renderDepositActivity();
+    await sleep(step.wait || 450);
+  }
+}
+
+async function simulateRejectedDeposit() {
+  if (!STATE.connected || !STATE.eligible) {
+    showToast('Eligible wallet required for paper reject simulation', 'error');
+    return;
+  }
+  const amount = Math.max(DEMO_VAULT.minDeposit, 1);
+  const dep = {
+    id: newDepositId(),
+    amount,
+    state: 'DETECTED',
+    history: [{ state: 'DETECTED', note: 'Inbound SOL seen (paper)', at: Date.now() }],
+    refund_txid: null,
+    shares: 0,
+  };
+  STATE.deposits.push(dep);
+  renderDepositActivity();
+  showToast('Paper reject path: no mint → full refund', 'info');
+  await advancePaperDeposit(dep, [
+    { state: 'SCREENING', note: 'Re-screen from + tx', wait: 500 },
+    { state: 'REJECTED', note: 'Policy deny — no mint', wait: 500 },
+    { state: 'QUARANTINED', note: 'Moved to quarantine rail (≠ NAV)', wait: 500 },
+    { state: 'REFUNDING', note: 'Full return minus network fee', wait: 600 },
+    { state: 'REFUNDED', note: 'Investor notified', refund_txid: fakeTxid('rfnd_'), wait: 200 },
+  ]);
+  showToast('Refunded (paper) — ' + dep.refund_txid, 'success');
 }
 
 async function fetchUserBalances() {
@@ -235,10 +412,16 @@ function updateUserUI() {
   document.getElementById('port-chiller-val').textContent = '≈ ' + solVal + ' SOL';
   document.getElementById('port-sol').textContent = STATE.userSolBalance.toFixed(4);
 
-  document.getElementById('btn-deposit').disabled = false;
-  document.getElementById('btn-deposit').textContent = 'Deposit SOL';
-  document.getElementById('btn-withdraw').disabled = false;
-  document.getElementById('btn-withdraw').textContent = 'Withdraw $CHILLER';
+  if (STATE.eligible) {
+    setDepositActionsEnabled(true, 'Deposit SOL');
+    document.getElementById('btn-withdraw').disabled = false;
+    document.getElementById('btn-withdraw').textContent = 'Withdraw $CHILLER';
+  } else {
+    setDepositActionsEnabled(false, STATE.connected ? 'Unavailable' : 'Connect Wallet');
+    document.getElementById('btn-withdraw').disabled = true;
+    document.getElementById('btn-withdraw').textContent = STATE.connected ? 'Unavailable' : 'Connect Wallet';
+  }
+  renderDepositActivity();
 }
 
 // ═══════════════════════════════════════════════
@@ -344,23 +527,46 @@ async function executeDeposit() {
     showToast('Connect wallet first', 'error');
     return;
   }
+  if (!STATE.eligible) {
+    openEligibilityModal();
+    return;
+  }
+  if (amount > STATE.userSolBalance) {
+    showToast('❌ Insufficient SOL balance', 'error');
+    return;
+  }
 
-  showToast('🔄 Processing deposit...', 'info');
+  setDepositActionsEnabled(false, 'Processing…');
+  const dep = {
+    id: newDepositId(),
+    amount,
+    state: 'DETECTED',
+    history: [{ state: 'DETECTED', note: 'Inbound SOL (paper)', at: Date.now() }],
+    refund_txid: null,
+    shares: 0,
+  };
+  STATE.deposits.push(dep);
+  renderDepositActivity();
+  showToast('Processing deposit…', 'info');
 
-  // Demo: simulate deposit
-  setTimeout(() => {
-    const nav = getCurrentNAV();
-    const tokens = Math.floor(amount / nav);
-    STATE.userSolBalance -= amount;
-    STATE.userChillerBalance += tokens;
-    DEMO_VAULT.totalAssets += amount;
-    DEMO_VAULT.totalSupply += tokens;
-    updateUserUI();
-    updateVaultStats();
-    document.getElementById('deposit-amount').value = '';
-    document.getElementById('deposit-receive').textContent = '0 $CHILLER';
-    showToast(`✅ Deposited ${amount} SOL → ${tokens} $CHILLER`, 'success');
-  }, 1500);
+  const nav = getCurrentNAV();
+  const tokens = Math.floor(amount / nav);
+  await advancePaperDeposit(dep, [
+    { state: 'SCREENING', note: 'KYT on from + tx', wait: 500 },
+    { state: 'CLEAN_READY', note: 'Allow — issue mint attestation', wait: 450 },
+    { state: 'MINTING', note: 'Attestation submitted', wait: 550 },
+    { state: 'MINTED', note: tokens + ' $CHILLER minted', shares: tokens, wait: 200 },
+  ]);
+
+  STATE.userSolBalance -= amount;
+  STATE.userChillerBalance += tokens;
+  DEMO_VAULT.totalAssets += amount;
+  DEMO_VAULT.totalSupply += tokens;
+  document.getElementById('deposit-amount').value = '';
+  document.getElementById('deposit-receive').textContent = '0 $CHILLER';
+  updateUserUI();
+  updateVaultStats();
+  showToast(`Deposited ${amount} SOL → ${tokens} $CHILLER`, 'success');
 }
 
 async function executeWithdraw() {
@@ -665,6 +871,7 @@ function init() {
   updateVaultStats();
   renderTrades();
   drawNavChart();
+  renderDepositActivity();
 
   // Redraw chart on resize
   window.addEventListener('resize', () => drawNavChart());

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>$CHILLER Dashboard — Vault Management</title>
-    <meta name="description" content="Manage your $CHILLER vault: deposit SOL, withdraw, track AI trading performance in real-time.">
+    <meta name="description" content="Manage your $CHILLER vault: deposit SOL, withdraw, track NAV. No yield promises.">
     <link rel="stylesheet" href="style.css">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧊</text></svg>">
 </head>
@@ -154,6 +154,9 @@
                         <button class="submit-btn deposit" id="btn-deposit" onclick="executeDeposit()" disabled>
                             Connect Wallet
                         </button>
+                        <button class="paper-link-btn" type="button" id="btn-paper-reject" onclick="simulateRejectedDeposit()" disabled>
+                            Paper: simulate rejected deposit → full refund
+                        </button>
                     </div>
 
                     <!-- Withdraw Form -->
@@ -183,6 +186,20 @@
                             Connect Wallet
                         </button>
                     </div>
+                </div>
+            </div>
+
+            <!-- Paper deposit / refund activity -->
+            <div class="card" id="deposit-activity-card">
+                <div class="card-header">
+                    <h3>Deposit activity</h3>
+                    <span class="paper-badge" id="eligibility-badge">Not connected</span>
+                </div>
+                <div class="card-body">
+                    <p class="eligibility-copy" id="deposit-activity-empty">
+                        Connect a wallet to run eligibility screening. Paper mode can simulate mint or full refund.
+                    </p>
+                    <div id="deposit-timeline" class="deposit-timeline" hidden></div>
                 </div>
             </div>
 
@@ -379,10 +396,50 @@
                     <div class="wallet-icon demo-icon">🧊</div>
                     <div>
                         <div class="wallet-option-name">Demo Mode</div>
-                        <div class="wallet-option-desc">Try without a wallet</div>
+                        <div class="wallet-option-desc">Eligible wallet — paper deposit flow</div>
                     </div>
                 </div>
             </button>
+            <button class="wallet-option demo" onclick="connectSpecificWallet('demo-deny')">
+                <div class="wallet-option-left">
+                    <div class="wallet-icon demo-icon">🚫</div>
+                    <div>
+                        <div class="wallet-option-name">Demo Ineligible</div>
+                        <div class="wallet-option-desc">Paper KYT deny → service unavailable modal</div>
+                    </div>
+                </div>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Eligibility checking overlay -->
+<div class="wallet-modal-overlay" id="eligibility-checking" aria-live="polite">
+    <div class="wallet-modal eligibility-modal">
+        <div class="wallet-modal-body" style="padding:28px;text-align:center">
+            <div class="eligibility-spinner"></div>
+            <h3 style="margin:16px 0 8px">Checking eligibility…</h3>
+            <p class="eligibility-copy">Wallet screening before deposit access.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Service unavailable (KYT deny) — neutral wording, no risk scores -->
+<div class="wallet-modal-overlay" id="eligibility-modal" onclick="closeEligibilityModal(event)">
+    <div class="wallet-modal eligibility-modal" role="dialog" aria-labelledby="eligibility-title">
+        <div class="wallet-modal-header">
+            <h3 id="eligibility-title">Service unavailable for this wallet</h3>
+            <button class="wallet-modal-close" onclick="closeEligibilityModal()">&times;</button>
+        </div>
+        <div class="wallet-modal-body" style="padding:20px 24px 24px">
+            <p class="eligibility-copy">
+                We can’t offer Chiller Vault for this wallet under our compliance policy.
+                Please disconnect and try another wallet, or contact support if you believe this is an error.
+            </p>
+            <div class="eligibility-actions">
+                <button class="submit-btn" type="button" onclick="disconnectDueToIneligible()">Disconnect wallet</button>
+                <a class="eligibility-support" href="mailto:support@chillercoin.io">Contact support</a>
+            </div>
         </div>
     </div>
 </div>
