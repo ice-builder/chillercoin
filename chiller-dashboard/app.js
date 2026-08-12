@@ -9,10 +9,12 @@
 
 const CONFIG = {
   programId: '7ayYqgiiBtXdk13f9DBFTxJoYKkZyr3AaaLt2f2TPDoH',
+  /** Public demo defaults — switch rpc/network when vault is live on Solana. */
   rpcUrl: 'https://api.devnet.solana.com',
-  network: 'devnet',
+  network: 'demo',
   explorerBase: 'https://solscan.io/tx/',
   explorerSuffix: '?cluster=devnet',
+  tradesFeedUrl: 'data/onchain-trades.json',
   LAMPORTS: 1_000_000_000,
   CHILLER_DECIMALS: 1_000_000,
   NAV_INITIAL: 0.01, // SOL per $CHILLER
@@ -45,26 +47,17 @@ const STATE = {
   theme: 'dark',
 };
 
-// Demo trades for display
-const DEMO_TRADES = [
-  { pair: 'BTC-PERP', side: 'LONG', entry: 97450, exit: 98630, pnl_bps: 121, duration: 3600, time: Date.now() - 1800000, tx: '5VJYYm...abc1' },
-  { pair: 'ETH-PERP', side: 'SHORT', entry: 3580, exit: 3520, pnl_bps: 168, duration: 2700, time: Date.now() - 5400000, tx: '4ffMqp...abc2' },
-  { pair: 'SOL-PERP', side: 'LONG', entry: 178.5, exit: 181.2, pnl_bps: 151, duration: 5400, time: Date.now() - 9000000, tx: '8xKpWn...abc3' },
-  { pair: 'ETH-PERP', side: 'LONG', entry: 3510, exit: 3490, pnl_bps: -57, duration: 1800, time: Date.now() - 14400000, tx: '3mNqRt...abc4' },
-  { pair: 'BTC-PERP', side: 'SHORT', entry: 98100, exit: 97350, pnl_bps: 76, duration: 7200, time: Date.now() - 21600000, tx: '9pLzKq...abc5' },
-  { pair: 'SOL-PERP', side: 'LONG', entry: 175.8, exit: 179.1, pnl_bps: 188, duration: 4500, time: Date.now() - 28800000, tx: '2dWxYr...abc6' },
-  { pair: 'BTC-PERP', side: 'LONG', entry: 96800, exit: 97650, pnl_bps: 88, duration: 6000, time: Date.now() - 36000000, tx: '7hNfVs...abc7' },
-  { pair: 'ETH-PERP', side: 'SHORT', entry: 3545, exit: 3560, pnl_bps: -42, duration: 900, time: Date.now() - 43200000, tx: '6kMtBp...abc8' },
-];
+// On-chain TradeLogged feed (populated from data/onchain-trades.json / RPC)
+let ONCHAIN_TRADES = [];
 
 // Demo vault state
 const DEMO_VAULT = {
   totalAssets: 42.85,
   totalSupply: 3850,
   highWaterMark: 41.2,
-  totalTrades: 47,
-  totalWins: 34,
-  cumulativePnlBps: 1850,
+  totalTrades: 0,
+  totalWins: 0,
+  cumulativePnlBps: 0,
   perfFeeBps: 2000,
   mgmtFeeBps: 200,
   wdFeeBps: 50,
@@ -274,11 +267,13 @@ async function silentPerTxScreen(trigger, { forceDeny = false } = {}) {
 function setDepositActionsEnabled(enabled, depositLabel) {
   const dep = document.getElementById('btn-deposit');
   const rej = document.getElementById('btn-paper-reject');
+  const wdDeny = document.getElementById('btn-paper-wd-deny');
   if (dep) {
     dep.disabled = !enabled;
     if (depositLabel) dep.textContent = depositLabel;
   }
   if (rej) rej.disabled = !enabled;
+  if (wdDeny) wdDeny.disabled = !enabled;
 }
 
 /** Mock KYT: paper only. Never shows scores/reason codes in UI. */
@@ -373,22 +368,24 @@ function renderDepositActivity() {
   badge.textContent = map[STATE.eligibilityStatus] || STATE.eligibilityStatus;
   badge.dataset.status = STATE.eligibilityStatus;
 
-  if (!STATE.deposits.length) {
+  const hasDep = STATE.deposits.length > 0;
+  const hasWd = STATE.withdraws.length > 0;
+  if (!hasDep && !hasWd) {
     timeline.hidden = true;
     empty.hidden = false;
     if (STATE.eligibilityStatus === 'deny') {
-      empty.textContent = 'This wallet cannot use the vault under our compliance policy. Deposit UI stays locked.';
+      empty.textContent = 'This wallet cannot use the vault right now. Actions stay locked.';
     } else if (STATE.eligibilityStatus === 'allow') {
-      empty.textContent = 'No deposits yet. Deposits mint via attestation only (open deposit disabled).';
+      empty.textContent = 'No activity yet. Deposit mints via attestation only; withdraws are screened before payout.';
     } else {
-      empty.textContent = 'Connect a wallet to continue. Deposits use attested mint; rejected transfers are returned.';
+      empty.textContent = 'Connect a wallet. Deposits use attested mint; withdraws are screened before payout.';
     }
     return;
   }
 
   empty.hidden = true;
   timeline.hidden = false;
-  timeline.innerHTML = STATE.deposits
+  const depHtml = STATE.deposits
     .slice()
     .reverse()
     .map((d) => {
@@ -398,16 +395,36 @@ function renderDepositActivity() {
       const refund = d.refund_txid
         ? `<div class="deposit-refund">Refund tx: <code>${d.refund_txid}</code></div>`
         : '';
+      const att = d.attestation?.nonce
+        ? `<div class="deposit-refund">Attestation: <code>${d.attestation.nonce}</code></div>`
+        : '';
       return `<article class="deposit-item" data-state="${d.state}">
         <div class="deposit-item-head">
-          <strong>${d.id}</strong>
+          <strong>Deposit ${d.id}</strong>
           <span>${d.amount} SOL → <em>${d.state}</em></span>
         </div>
         <ol class="deposit-steps">${steps}</ol>
-        ${refund}
+        ${att}${refund}
       </article>`;
     })
     .join('');
+  const wdHtml = STATE.withdraws
+    .slice()
+    .reverse()
+    .map((w) => {
+      const steps = (w.history || [{ state: w.state, note: '' }]).map((h) =>
+        `<li class="deposit-step"><span class="deposit-step-state">${h.state}</span><span class="deposit-step-note">${h.note || ''}</span></li>`
+      ).join('');
+      return `<article class="deposit-item" data-state="${w.state}">
+        <div class="deposit-item-head">
+          <strong>Withdraw ${w.id}</strong>
+          <span>${w.amount} $CHILLER → <em>${w.state}</em></span>
+        </div>
+        <ol class="deposit-steps">${steps}</ol>
+      </article>`;
+    })
+    .join('');
+  timeline.innerHTML = depHtml + wdHtml;
 }
 
 async function advancePaperDeposit(dep, states) {
@@ -715,26 +732,31 @@ async function executeWithdraw() {
     id: 'wd_' + Math.random().toString(36).slice(2, 8),
     amount: tokens,
     state: 'REQUESTED',
+    history: [{ state: 'REQUESTED', note: 'Withdraw requested', at: Date.now() }],
   };
   STATE.withdraws.push(wd);
   audit('withdraw_submit', { withdraw_id: wd.id, tokens });
+  renderDepositActivity();
   showToast('Processing withdrawal…', 'info');
   document.getElementById('btn-withdraw').disabled = true;
   document.getElementById('btn-withdraw').textContent = 'Processing…';
 
-  await sleep(400);
+  await sleep(350);
   wd.state = 'SCREENING';
-  // Silent AML before payout — no extra AML toast
+  wd.history.push({ state: 'SCREENING', note: 'Verifying…', at: Date.now() });
+  renderDepositActivity();
   const decision = await silentPerTxScreen('withdraw');
   if (decision === 'deny') {
     wd.state = 'REJECTED';
+    wd.history.push({ state: 'REJECTED', note: 'Unavailable right now', at: Date.now() });
     audit('withdraw_rejected', { withdraw_id: wd.id });
+    renderDepositActivity();
     updateUserUI();
     showToast('Withdrawal unavailable right now', 'info');
     return;
   }
 
-  await sleep(500);
+  await sleep(450);
   const nav = getCurrentNAV();
   const gross = tokens * nav;
   const fee = gross * (DEMO_VAULT.wdFeeBps / 10000);
@@ -744,12 +766,42 @@ async function executeWithdraw() {
   DEMO_VAULT.totalAssets -= gross;
   DEMO_VAULT.totalSupply -= tokens;
   wd.state = 'PAID';
+  wd.history.push({ state: 'PAID', note: net.toFixed(4) + ' SOL', at: Date.now() });
   audit('withdraw_paid', { withdraw_id: wd.id, net });
+  renderDepositActivity();
   updateUserUI();
   updateVaultStats();
   document.getElementById('withdraw-amount').value = '';
   document.getElementById('withdraw-receive').textContent = '0 SOL';
   showToast(`Withdrew ${tokens} $CHILLER → ${net.toFixed(4)} SOL`, 'success');
+}
+
+async function simulateRejectedWithdraw() {
+  if (!STATE.connected || !STATE.eligible) {
+    showToast('Eligible wallet required', 'error');
+    return;
+  }
+  const tokens = Math.max(1, Math.min(10, STATE.userChillerBalance || 10));
+  const wd = {
+    id: 'wd_' + Math.random().toString(36).slice(2, 8),
+    amount: tokens,
+    state: 'REQUESTED',
+    history: [{ state: 'REQUESTED', note: 'Withdraw requested', at: Date.now() }],
+  };
+  STATE.withdraws.push(wd);
+  audit('withdraw_submit', { withdraw_id: wd.id, tokens, paper_deny: true });
+  renderDepositActivity();
+  showToast('Processing withdrawal…', 'info');
+  await sleep(350);
+  wd.state = 'SCREENING';
+  wd.history.push({ state: 'SCREENING', note: 'Verifying…', at: Date.now() });
+  renderDepositActivity();
+  await silentPerTxScreen('withdraw', { forceDeny: true });
+  wd.state = 'REJECTED';
+  wd.history.push({ state: 'REJECTED', note: 'Unavailable right now', at: Date.now() });
+  audit('withdraw_rejected', { withdraw_id: wd.id, paper_deny: true });
+  renderDepositActivity();
+  showToast('Withdrawal unavailable right now', 'info');
 }
 
 // ═══════════════════════════════════════════════
@@ -764,12 +816,64 @@ const PAIR_ICONS = {
 function renderTrades() {
   const recentBody = document.getElementById('recent-trades-body');
   const allBody = document.getElementById('all-trades-body');
+  const list = ONCHAIN_TRADES;
 
-  const recentHtml = DEMO_TRADES.slice(0, 5).map(tradeRow).join('');
-  const allHtml = DEMO_TRADES.map(tradeRowFull).join('');
+  if (!list.length) {
+    const msg =
+      'No on-chain trades published yet. After vault go-live, closed sleeve trades appear here with Solana signatures.';
+    const emptyRecent = `<tr><td colspan="6" style="opacity:.7;padding:16px">${msg}</td></tr>`;
+    const emptyAll = `<tr><td colspan="9" style="opacity:.7;padding:16px">${msg}</td></tr>`;
+    if (recentBody) recentBody.innerHTML = emptyRecent;
+    if (allBody) allBody.innerHTML = emptyAll;
+    const note = document.getElementById('trades-feed-note');
+    if (note) {
+      note.hidden = false;
+      note.textContent =
+        CONFIG.network === 'demo'
+          ? 'Demo mode — trade feed stays empty until the vault is deployed and log_trade is live. No yield is promised.'
+          : 'Waiting for on-chain trade events.';
+    }
+    return;
+  }
+  const note = document.getElementById('trades-feed-note');
+  if (note) note.hidden = true;
 
-  recentBody.innerHTML = recentHtml;
-  allBody.innerHTML = allHtml;
+  const mapped = list.map(normalizeTrade);
+  if (recentBody) recentBody.innerHTML = mapped.slice(0, 8).map(tradeRow).join('');
+  if (allBody) allBody.innerHTML = mapped.map(tradeRowFull).join('');
+}
+
+function normalizeTrade(t) {
+  return {
+    pair: t.pair || t.symbol || '—',
+    side: (t.side || 'LONG').toUpperCase(),
+    entry: t.entry,
+    exit: t.exit,
+    pnl_bps: t.pnl_bps || 0,
+    duration: t.duration || 0,
+    time: (t.ts ? t.ts * 1000 : Date.now()),
+    tx: t.sig || t.tx || '',
+  };
+}
+
+async function loadOnchainTrades() {
+  try {
+    const resp = await fetch(CONFIG.tradesFeedUrl + '?t=' + Date.now(), { cache: 'no-store' });
+    if (!resp.ok) throw new Error('feed ' + resp.status);
+    const data = await resp.json();
+    ONCHAIN_TRADES = Array.isArray(data) ? data : [];
+    STATE.trades = ONCHAIN_TRADES;
+    if (ONCHAIN_TRADES.length) {
+      DEMO_VAULT.totalTrades = Math.max(DEMO_VAULT.totalTrades, ONCHAIN_TRADES.length);
+      DEMO_VAULT.totalWins = ONCHAIN_TRADES.filter((t) => (t.pnl_bps || 0) > 0).length;
+      DEMO_VAULT.cumulativePnlBps = ONCHAIN_TRADES.reduce((s, t) => s + (t.pnl_bps || 0), 0);
+    }
+  } catch (e) {
+    console.warn('on-chain trades feed:', e.message || e);
+    ONCHAIN_TRADES = ONCHAIN_TRADES || [];
+  }
+  renderTrades();
+  updateVaultStats();
 }
 
 function tradeRow(t) {
@@ -778,6 +882,10 @@ function tradeRow(t) {
   const dur = formatDuration(t.duration);
   const time = formatTime(t.time);
   const icon = PAIR_ICONS[t.pair] || '•';
+  const txShort = t.tx ? (t.tx.slice(0, 8) + '…' + t.tx.slice(-4)) : '—';
+  const txCell = t.tx
+    ? `<a class="tx-link" href="${CONFIG.explorerBase}${t.tx}${CONFIG.explorerSuffix}" target="_blank" rel="noopener">${txShort}</a>`
+    : '—';
 
   return `<tr>
     <td><div class="pair-cell"><span class="pair-icon">${icon}</span>${t.pair}</div></td>
@@ -785,7 +893,7 @@ function tradeRow(t) {
     <td><span class="pnl-cell ${isWin ? 'profit' : 'loss'}">${isWin ? '+' : ''}${pnl}%</span></td>
     <td>${dur}</td>
     <td>${time}</td>
-    <td><a class="tx-link" href="${CONFIG.explorerBase}${t.tx}${CONFIG.explorerSuffix}" target="_blank">${t.tx}</a></td>
+    <td>${txCell}</td>
   </tr>`;
 }
 
@@ -796,17 +904,23 @@ function tradeRowFull(t) {
   const time = formatTime(t.time);
   const icon = PAIR_ICONS[t.pair] || '•';
   const nav = getCurrentNAV();
+  const txShort = t.tx ? (t.tx.slice(0, 8) + '…' + t.tx.slice(-4)) : '—';
+  const txCell = t.tx
+    ? `<a class="tx-link" href="${CONFIG.explorerBase}${t.tx}${CONFIG.explorerSuffix}" target="_blank" rel="noopener">${txShort}</a>`
+    : '—';
+  const entry = Number(t.entry || 0);
+  const exit = Number(t.exit || 0);
 
   return `<tr>
     <td><div class="pair-cell"><span class="pair-icon">${icon}</span>${t.pair}</div></td>
     <td><span class="side-badge ${t.side.toLowerCase()}">${t.side}</span></td>
-    <td style="font-family:var(--font-mono)">$${t.entry.toLocaleString()}</td>
-    <td style="font-family:var(--font-mono)">$${t.exit.toLocaleString()}</td>
+    <td style="font-family:var(--font-mono)">$${entry.toLocaleString(undefined,{maximumFractionDigits:4})}</td>
+    <td style="font-family:var(--font-mono)">$${exit.toLocaleString(undefined,{maximumFractionDigits:4})}</td>
     <td><span class="pnl-cell ${isWin ? 'profit' : 'loss'}">${isWin ? '+' : ''}${pnl}%</span></td>
     <td>${dur}</td>
     <td style="font-family:var(--font-mono)">${nav.toFixed(4)}</td>
     <td>${time}</td>
-    <td><a class="tx-link" href="${CONFIG.explorerBase}${t.tx}${CONFIG.explorerSuffix}" target="_blank">${t.tx}</a></td>
+    <td>${txCell}</td>
   </tr>`;
 }
 
@@ -1019,19 +1133,19 @@ function initTheme() {
 
 function init() {
   initTheme();
+  const badge = document.getElementById('network-badge');
+  if (badge) badge.textContent = (CONFIG.network || 'localnet').toUpperCase();
   generateNavHistory();
   updateVaultStats();
-  renderTrades();
   drawNavChart();
   renderDepositActivity();
+  loadOnchainTrades();
 
-  // Redraw chart on resize
   window.addEventListener('resize', () => drawNavChart());
 
-  // Auto-refresh
   setInterval(() => {
     updateVaultStats();
-    renderTrades();
+    loadOnchainTrades();
   }, CONFIG.REFRESH_INTERVAL);
 }
 

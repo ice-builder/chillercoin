@@ -62,7 +62,7 @@
             <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
                 <span id="theme-icon">☀️</span>
             </button>
-            <span class="network-badge" id="network-badge">Devnet</span>
+            <span class="network-badge" id="network-badge">Demo</span>
             <button class="connect-btn" id="connect-btn" onclick="connectWallet()">
                 🔗 Connect Wallet
             </button>
@@ -153,8 +153,11 @@
                         </div>
                         <div class="conversion-row">
                             <span>Mint path</span>
-                            <span>Attested</span>
+                            <span>Attested only</span>
                         </div>
+                        <p class="eligibility-copy" style="margin:10px 0 0;font-size:12px;opacity:.75">
+                            Open deposit is disabled. Shares mint only after transfer checks (paper demo).
+                        </p>
                         <button class="submit-btn deposit" id="btn-deposit" onclick="executeDeposit()" disabled>
                             Connect Wallet
                         </button>
@@ -186,22 +189,28 @@
                             <span>Withdrawal fee</span>
                             <span>0.5%</span>
                         </div>
+                        <p class="eligibility-copy" style="margin:10px 0 0;font-size:12px;opacity:.75">
+                            Each withdraw is checked silently before payout. Shares stay if unavailable.
+                        </p>
                         <button class="submit-btn withdraw" id="btn-withdraw" onclick="executeWithdraw()" disabled>
                             Connect Wallet
+                        </button>
+                        <button class="paper-link-btn" type="button" id="btn-paper-wd-deny" onclick="simulateRejectedWithdraw()" disabled>
+                            Paper: blocked withdrawal
                         </button>
                     </div>
                 </div>
             </div>
 
-            <!-- Paper deposit / refund activity -->
+            <!-- Paper activity -->
             <div class="card" id="deposit-activity-card">
                 <div class="card-header">
-                    <h3>Deposit activity</h3>
+                    <h3>Vault activity</h3>
                     <span class="paper-badge" id="eligibility-badge">Not connected</span>
                 </div>
                 <div class="card-body">
                     <p class="eligibility-copy" id="deposit-activity-empty">
-                        Connect a wallet to run eligibility screening. Paper mode can simulate mint or full refund.
+                        Connect a wallet. Deposits use attested mint; withdraws are screened before payout.
                     </p>
                     <div id="deposit-timeline" class="deposit-timeline" hidden></div>
                 </div>
@@ -211,9 +220,11 @@
             <div class="card">
                 <div class="card-header">
                     <h3>🔥 Recent Trades</h3>
+                    <span class="paper-badge" title="From vault log_trade events when live">Trades verified on-chain</span>
                     <a class="nav-item" onclick="showPage('trades')" style="padding:4px 8px;font-size:12px;cursor:pointer;">View All →</a>
                 </div>
                 <div class="card-body" style="padding:0">
+                    <p id="trades-feed-note" class="eligibility-copy" style="padding:12px 16px;margin:0" hidden></p>
                     <table class="trades-table" id="recent-trades-table">
                         <thead>
                             <tr>
@@ -250,9 +261,13 @@
 
             <div class="card">
                 <div class="card-header">
-                    <h3>📋 All Trades (On-Chain Verified)</h3>
+                    <h3>📋 All Trades</h3>
+                    <span class="paper-badge" title="Closed sleeve trades via vault log_trade">Trades verified on-chain</span>
                 </div>
                 <div class="card-body" style="padding:0">
+                    <p class="eligibility-copy" style="padding:12px 16px;margin:0">
+                        On-chain trade log for holders. Demo build shows an empty feed until vault go-live — no yield is promised.
+                    </p>
                     <table class="trades-table">
                         <thead>
                             <tr>

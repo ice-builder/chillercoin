@@ -106,7 +106,7 @@ Built with [Anchor](https://www.anchor-lang.com/) v0.31.1 on Solana.
 | `accept_authority` | New Auth | Accept authority transfer (step 2) |
 | `set_drain_limit` | Authority | Configure daily drain cap |
 
-> Roadmap: mint gated by **clean attestation** after KYT (see compliance docs). Today the program still mints on deposit; eligibility/refund rails are specified and being built off-chain first.
+> Investor mint path is **`mint_with_attestation`** (open `deposit` is deprecated on-chain). Eligibility / refund rails are documented under `docs/`.
 
 ### Fee Structure
 
