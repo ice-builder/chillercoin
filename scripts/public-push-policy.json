@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "name": "chillercoin-public-push-gate",
+  "description": "Pre-push blockers for ice-builder/chillercoin \u2014 product/site public, trading private",
+  "allowed_top_level": [
+    "README.md",
+    "LICENSE",
+    ".gitignore",
+    "assets",
+    "docs",
+    "scripts",
+    "chiller-dashboard",
+    "chiller-vault"
+  ],
+  "path_block_globs": [
+    "**/vault_bridge.py",
+    "**/drift_executor.py",
+    "**/exchange_adapter.py",
+    "**/*_mirror.py",
+    "**/*_executor.py",
+    "**/soldier/**",
+    "**/insider/**",
+    "**/scalper*/**",
+    "**/liquidation-hunter*/**",
+    "**/deploy_vps/**",
+    "**/.local_ai/**",
+    "**/artifacts/**",
+    "**/ZeroChainAI/**",
+    "**/chiller-tg-bot/**",
+    "**/tg-bot/**",
+    "**/telegram*/**",
+    "**/*tg*bot*",
+    "**/bot_token*",
+    "**/sticker*pack*",
+    "**/.env",
+    "**/.env.*",
+    "**/*-keypair.json",
+    "**/id.json",
+    "**/*.pem",
+    "**/*.wallet",
+    "**/trade_log.jsonl",
+    "**/trade_signals.json",
+    "**/*.db",
+    "**/pm2*.json",
+    "**/dump.pm2"
+  ],
+  "path_warn_globs": [
+    "**/debug_pd.ts",
+    "**/*secret*",
+    "**/*credential*",
+    "**/ops/**",
+    "**/compliance-service/**",
+    "**/kyt/**",
+    "**/refund*worker*",
+    "**/deposit*watcher*"
+  ],
+  "content_block_patterns": [
+    {
+      "id": "github_pat",
+      "regex": "github_pat_[A-Za-z0-9_]{20,}",
+      "message": "GitHub PAT embedded in file"
+    },
+    {
+      "id": "url_basic_auth",
+      "regex": "https?:\\/\\/[^\\s\\/:]+:[^\\s\\/@]+@github\\.com",
+      "message": "Git remote URL with embedded credentials"
+    },
+    {
+      "id": "private_key",
+      "regex": "-----BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY-----",
+      "message": "Private key material"
+    },
+    {
+      "id": "solana_byte_secret",
+      "regex": "\\[[0-9]+,\\s*[0-9]+,\\s*[0-9]+(?:,\\s*[0-9]+){30,}\\]",
+      "message": "Possible Solana secret key byte array"
+    },
+    {
+      "id": "telegram_bot_token",
+      "regex": "\\b\\d{8,12}:[A-Za-z0-9_-]{30,}\\b",
+      "message": "Possible Telegram bot token"
+    },
+    {
+      "id": "telegram_api",
+      "regex": "api\\.telegram\\.org|TelegramBot|node-telegram-bot-api|grammy|telegraf",
+      "message": "Telegram bot stack \u2014 TG is private, not for public repo"
+    },
+    {
+      "id": "aws_access_key",
+      "regex": "AKIA[0-9A-Z]{16}",
+      "message": "Possible AWS access key"
+    },
+    {
+      "id": "generic_api_secret_assign",
+      "regex": "(api_secret|API_SECRET|secret_key|SECRET_KEY)\\s*[:=]\\s*['\\\"][^'\\\"]{8,}['\\\"]",
+      "message": "Hardcoded API secret assignment"
+    },
+    {
+      "id": "bybit_key_assign",
+      "regex": "(BYBIT_(API_)?(KEY|SECRET)|bybit_api_(key|secret))\\s*[:=]\\s*['\\\"][^'\\\"]+['\\\"]",
+      "message": "Bybit API credential assignment"
+    }
+  ],
+  "content_warn_patterns": [
+    {
+      "id": "yield_promise",
+      "regex": "(deposit and earn|(?<![Nn]o\\s)guaranteed (yield|returns?|profit)|AI-Powered Yield|You earn\\. Just chill)",
+      "message": "Marketing may over-promise yield \u2014 align with no yield promise"
+    },
+    {
+      "id": "drift_as_primary",
+      "regex": "trading bots generate yield through perpetual futures on \\[?Drift",
+      "message": "README still Drift-first; product direction is Bybit sleeve"
+    },
+    {
+      "id": "api_key_param",
+      "regex": "api_key\\s*[:=]",
+      "message": "Mentions api_key \u2014 verify no real secret"
+    },
+    {
+      "id": "trading_architecture",
+      "regex": "(vault_bridge|Soldier|Insider bot|scalper-pro|IIE)",
+      "message": "Trading-system naming in public surface"
+    }
+  ],
+  "skip_dirs": [
+    ".git",
+    "node_modules",
+    "target",
+    "test-ledger",
+    ".anchor",
+    "dist",
+    "build",
+    ".venv",
+    "venv",
+    "reports"
+  ],
+  "skip_content_globs": [
+    "scripts/public-push-policy.json",
+    "scripts/public-push-audit.mjs",
+    "scripts/reports/**"
+  ],
+  "max_file_bytes_for_content_scan": 1500000
+}
