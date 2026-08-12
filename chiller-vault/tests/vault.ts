@@ -1,7 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction, LAMPORTS_PER_SOL, sendAndConfirmTransaction, BpfLoader } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, createAssociatedTokenAccountInstruction, getAssociatedTokenAddress, getAccount } from "@solana/spl-token";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { assert } from "chai";
 
 // ═══════════════════════════════════════════════
@@ -202,8 +202,8 @@ describe("$CHILLER SOL Vault (R6)", () => {
     console.log(`    ✅ Initialized: authority=${v.authority.toBase58().slice(0,8)}...`);
   });
 
-  // ─── 4. deposit (M-1: with min_tokens_out) ───
-  it("4. deposit 5 SOL → $CHILLER (M-1: slippage)", async () => {
+  // ─── 4. open deposit deprecated (compliance → mint_with_attestation) ───
+  it("4. open deposit rejects with OpenDepositDeprecated", async () => {
     userChillerAta = await getAssociatedTokenAddress(chillerMint, userWallet.publicKey);
     const createAtaIx = createAssociatedTokenAccountInstruction(
       userWallet.publicKey, userChillerAta, userWallet.publicKey, chillerMint
@@ -211,13 +211,12 @@ describe("$CHILLER SOL Vault (R6)", () => {
     await sendAndConfirmTransaction(conn, new Transaction().add(createAtaIx), [userWallet]);
 
     const amount = BigInt(5 * LAMPORTS_PER_SOL);
-    const minTokensOut = BigInt(1); // M-1: accept any amount > 0
+    const minTokensOut = BigInt(1);
 
-    // data: sighash(8) + amount(8) + min_tokens_out(8)
     const data = Buffer.alloc(8 + 8 + 8);
     sighash("global", "deposit").copy(data, 0);
     data.writeBigUInt64LE(amount, 8);
-    data.writeBigUInt64LE(minTokensOut, 16);  // M-1
+    data.writeBigUInt64LE(minTokensOut, 16);
 
     const ix = new TransactionInstruction({
       programId: PROGRAM_ID,
@@ -232,16 +231,56 @@ describe("$CHILLER SOL Vault (R6)", () => {
       ],
       data,
     });
-    await sendAndConfirmTransaction(conn, new Transaction().add(ix), [userWallet]);
+    let failed = false;
+    try {
+      await sendAndConfirmTransaction(conn, new Transaction().add(ix), [userWallet]);
+    } catch (e) {
+      failed = true;
+      const msg = String(e);
+      assert.ok(
+        msg.includes("OpenDepositDeprecated") || msg.includes("custom program error") || msg.includes("0x"),
+        "expected OpenDepositDeprecated failure, got: " + msg
+      );
+    }
+    assert.ok(failed, "open deposit must fail");
+    assert.equal((await getVault()).totalAssets, 0n);
+    console.log("    ✅ Open deposit deprecated");
 
+    // Fund vault via attested mint so later drain/nav tests still run
+    const nonce = randomBytes(32);
+    const exp = BigInt(Math.floor(Date.now() / 1000) + 3600);
+    const mintData = Buffer.alloc(8 + 8 + 8 + 32 + 8 + 32);
+    sighash("global", "mint_with_attestation").copy(mintData, 0);
+    mintData.writeBigUInt64LE(amount, 8);
+    mintData.writeBigUInt64LE(minTokensOut, 16);
+    nonce.copy(mintData, 24);
+    mintData.writeBigInt64LE(exp, 56);
+    userWallet.publicKey.toBuffer().copy(mintData, 64);
+    const [receiptPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("attestation"), nonce],
+      PROGRAM_ID
+    );
+    const mintIx = new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: userWallet.publicKey, isSigner: true, isWritable: true },
+        { pubkey: authorityKp.publicKey, isSigner: true, isWritable: false },
+        { pubkey: vaultPda, isSigner: false, isWritable: true },
+        { pubkey: chillerMint, isSigner: false, isWritable: true },
+        { pubkey: solVaultPda, isSigner: false, isWritable: true },
+        { pubkey: userChillerAta, isSigner: false, isWritable: true },
+        { pubkey: receiptPda, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ],
+      data: mintData,
+    });
+    await sendAndConfirmTransaction(conn, new Transaction().add(mintIx), [userWallet, authorityKp]);
     const v = await getVault();
     assert.equal(v.totalAssets, amount);
-    assert.ok(v.totalSupply > 0n, "Supply minted");
-
     const ata = await getAccount(conn, userChillerAta);
-    assert.ok(ata.amount > 0n, "User got $CHILLER");
-    // M-2: with lamports/10, 5 SOL = 500_000_000 raw tokens = 500 CHILLER
-    console.log(`    ✅ Deposited: 5 SOL → ${ata.amount} raw tokens (${Number(ata.amount) / 1_000_000} CHILLER)`);
+    assert.ok(ata.amount > 0n, "User got $CHILLER via attestation");
+    console.log(`    ✅ Attested mint: 5 SOL → ${Number(ata.amount) / 1_000_000} CHILLER`);
   });
 
   // ─── 5. update_nav (N-4: vault + drift) ──────

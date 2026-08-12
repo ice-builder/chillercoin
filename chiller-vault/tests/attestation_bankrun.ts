@@ -273,6 +273,41 @@ describe("mint_with_attestation (Bankrun)", function () {
     }
   });
 
+  it("rejects open deposit (deprecated)", async () => {
+    const data = Buffer.alloc(8 + 8 + 8);
+    sighash("deposit").copy(data, 0);
+    data.writeBigUInt64LE(BigInt(LAMPORTS_PER_SOL), 8);
+    data.writeBigUInt64LE(BigInt(1), 16);
+    try {
+      await process(
+        [
+          new TransactionInstruction({
+            programId: PROGRAM_ID,
+            keys: [
+              { pubkey: userWallet.publicKey, isSigner: true, isWritable: true },
+              { pubkey: vaultPda, isSigner: false, isWritable: true },
+              { pubkey: chillerMint, isSigner: false, isWritable: true },
+              { pubkey: solVaultPda, isSigner: false, isWritable: true },
+              { pubkey: userAta, isSigner: false, isWritable: true },
+              { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+              { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            ],
+            data,
+          }),
+        ],
+        [userWallet]
+      );
+      assert.fail("expected OpenDepositDeprecated");
+    } catch (e: any) {
+      const msg = e.message || String(e);
+      assert.isTrue(
+        msg.includes("0x1789") || msg.includes("OpenDepositDeprecated") || msg.includes("6025"),
+        msg
+      );
+      console.log("    ✅ open deposit deprecated");
+    }
+  });
+
   it("rejects unauthorized attestation authority", async () => {
     const nonce = randomBytes(32);
     const clk = await banksClient.getClock();

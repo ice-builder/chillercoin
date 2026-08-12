@@ -17,6 +17,9 @@ const CONFIG = {
   CHILLER_DECIMALS: 1_000_000,
   NAV_INITIAL: 0.01, // SOL per $CHILLER
   REFRESH_INTERVAL: 30_000, // 30s
+  /** Investor mint path — open `deposit` ix is deprecated on-chain. */
+  mintPath: 'mint_with_attestation',
+  attestationTtlSec: 20 * 60,
 };
 
 // ═══════════════════════════════════════════════
@@ -36,6 +39,9 @@ const STATE = {
   navHistory: [],
   trades: [],
   deposits: [],
+  withdraws: [],
+  auditLog: [],
+  incidents: [],
   theme: 'dark',
 };
 
@@ -76,12 +82,14 @@ async function connectWallet() {
 
   if (STATE.connected) {
     // Disconnect
+    audit('wallet_disconnect', { provider: STATE.walletProvider });
     STATE.connected = false;
     STATE.walletAddress = null;
     STATE.walletProvider = null;
     STATE.eligible = false;
     STATE.eligibilityStatus = 'idle';
     STATE.deposits = [];
+    STATE.withdraws = [];
     btn.className = 'connect-btn';
     btn.textContent = '🔗 Connect Wallet';
     document.getElementById('stat-balance').textContent = '—';
@@ -217,8 +225,50 @@ async function connectSpecificWallet(type) {
 // Paper KYT / eligibility + deposit state machine
 // ═══════════════════════════════════════════════
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+function audit(action, detail = {}) {
+  const ev = {
+    at: Date.now(),
+    wallet: STATE.walletAddress,
+    action,
+    detail,
+  };
+  STATE.auditLog.push(ev);
+  try {
+    const key = 'chiller_audit_v1';
+    const prev = JSON.parse(localStorage.getItem(key) || '[]');
+    prev.push(ev);
+    localStorage.setItem(key, JSON.stringify(prev.slice(-500)));
+  } catch (_) { /* ignore */ }
+}
+
+function logIncident(kind, detail = {}) {
+  const inc = {
+    at: Date.now(),
+    wallet: STATE.walletAddress,
+    kind,
+    detail,
+  };
+  STATE.incidents.push(inc);
+  try {
+    const key = 'chiller_activity_v1';
+    const prev = JSON.parse(localStorage.getItem(key) || '[]');
+    prev.push(inc);
+    localStorage.setItem(key, JSON.stringify(prev.slice(-200)));
+  } catch (_) { /* ignore */ }
+}
+
+/** Silent per-tx screen. No extra UI toasts. Returns allow|deny. */
+async function silentPerTxScreen(trigger, { forceDeny = false } = {}) {
+  await sleep(400);
+  const decision = mockKytDecision(STATE.walletAddress, { forceDeny });
+  audit('screen', { trigger, decision });
+  if (decision === 'deny') {
+    const kind =
+      trigger === 'withdraw' ? 'deny_withdraw' :
+      trigger === 'connect' ? 'deny_connect' : 'deny_deposit';
+    logIncident(kind, { trigger });
+  }
+  return decision;
 }
 
 function setDepositActionsEnabled(enabled, depositLabel) {
@@ -247,16 +297,18 @@ async function runEligibilityCheck(opts = {}) {
   document.getElementById('btn-withdraw').textContent = 'Checking…';
   renderDepositActivity();
   document.getElementById('eligibility-checking')?.classList.add('show');
+  audit('wallet_connect', { provider: STATE.walletProvider });
 
   await sleep(900);
-  const decision = mockKytDecision(STATE.walletAddress, opts);
+  const decision = await silentPerTxScreen('connect', opts);
   document.getElementById('eligibility-checking')?.classList.remove('show');
 
   if (decision === 'allow') {
     STATE.eligible = true;
     STATE.eligibilityStatus = 'allow';
     updateUserUI();
-    showToast('Eligibility OK — deposit unlocked', 'success');
+    // Soft success only — no AML wording
+    showToast('Wallet connected', 'success');
   } else {
     STATE.eligible = false;
     STATE.eligibilityStatus = 'deny';
@@ -290,6 +342,22 @@ function fakeTxid(prefix) {
   return prefix + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 8);
 }
 
+/** Paper attestation ticket → mint_with_attestation (open deposit disabled). */
+function issuePaperAttestation(dep, tokens) {
+  const nonce = 'att_' + Math.random().toString(36).slice(2, 14);
+  const att = {
+    path: CONFIG.mintPath,
+    nonce,
+    exp: Date.now() + CONFIG.attestationTtlSec * 1000,
+    attested_wallet: STATE.walletAddress,
+    amount: dep.amount,
+    shares: tokens,
+  };
+  dep.attestation = att;
+  audit('attestation_issued', { deposit_id: dep.id, nonce, path: CONFIG.mintPath });
+  return att;
+}
+
 function renderDepositActivity() {
   const badge = document.getElementById('eligibility-badge');
   const empty = document.getElementById('deposit-activity-empty');
@@ -311,9 +379,9 @@ function renderDepositActivity() {
     if (STATE.eligibilityStatus === 'deny') {
       empty.textContent = 'This wallet cannot use the vault under our compliance policy. Deposit UI stays locked.';
     } else if (STATE.eligibilityStatus === 'allow') {
-      empty.textContent = 'No deposits yet. Deposit SOL or run a paper rejected-deposit simulation.';
+      empty.textContent = 'No deposits yet. Deposits mint via attestation only (open deposit disabled).';
     } else {
-      empty.textContent = 'Connect a wallet to run eligibility screening. Paper mode can simulate mint or full refund.';
+      empty.textContent = 'Connect a wallet to continue. Deposits use attested mint; rejected transfers are returned.';
     }
     return;
   }
@@ -363,21 +431,127 @@ async function simulateRejectedDeposit() {
     id: newDepositId(),
     amount,
     state: 'DETECTED',
-    history: [{ state: 'DETECTED', note: 'Inbound SOL seen (paper)', at: Date.now() }],
+    history: [{ state: 'DETECTED', note: 'Transfer received', at: Date.now() }],
     refund_txid: null,
     shares: 0,
+    attestation: null,
   };
   STATE.deposits.push(dep);
+  audit('deposit_submit', { deposit_id: dep.id, amount, paper_reject: true });
   renderDepositActivity();
-  showToast('Paper reject path: no mint → full refund', 'info');
+  showToast('Processing deposit…', 'info');
   await advancePaperDeposit(dep, [
-    { state: 'SCREENING', note: 'Re-screen from + tx', wait: 500 },
-    { state: 'REJECTED', note: 'Policy deny — no mint', wait: 500 },
-    { state: 'QUARANTINED', note: 'Moved to quarantine rail (≠ NAV)', wait: 500 },
-    { state: 'REFUNDING', note: 'Full return minus network fee', wait: 600 },
-    { state: 'REFUNDED', note: 'Investor notified', refund_txid: fakeTxid('rfnd_'), wait: 200 },
+    { state: 'SCREENING', note: 'Verifying transfer…', wait: 400 },
   ]);
-  showToast('Refunded (paper) — ' + dep.refund_txid, 'success');
+  await silentPerTxScreen('deposit', { forceDeny: true });
+  await advancePaperDeposit(dep, [
+    { state: 'REJECTED', note: 'Transfer not accepted', wait: 400 },
+    { state: 'QUARANTINED', note: 'Held for return', wait: 400 },
+    { state: 'REFUNDING', note: 'Returning funds…', wait: 500 },
+    { state: 'REFUNDED', note: 'Returned', refund_txid: fakeTxid('rfnd_'), wait: 200 },
+  ]);
+  audit('deposit_refunded', { deposit_id: dep.id, refund_txid: dep.refund_txid });
+  showToast('Transfer not accepted — funds returned', 'info');
+}
+
+async function executeDeposit() {
+  const amount = parseFloat(document.getElementById('deposit-amount').value);
+  if (!amount || amount < DEMO_VAULT.minDeposit) {
+    showToast('❌ Minimum deposit: ' + DEMO_VAULT.minDeposit + ' SOL', 'error');
+    return;
+  }
+
+  if (!STATE.connected) {
+    showToast('Connect wallet first', 'error');
+    return;
+  }
+  if (!STATE.eligible) {
+    openEligibilityModal();
+    return;
+  }
+  if (amount > STATE.userSolBalance) {
+    showToast('❌ Insufficient SOL balance', 'error');
+    return;
+  }
+
+  setDepositActionsEnabled(false, 'Processing…');
+  const dep = {
+    id: newDepositId(),
+    amount,
+    state: 'DETECTED',
+    history: [{ state: 'DETECTED', note: 'Transfer received', at: Date.now() }],
+    refund_txid: null,
+    shares: 0,
+    attestation: null,
+  };
+  STATE.deposits.push(dep);
+  audit('deposit_submit', { deposit_id: dep.id, amount, mint_path: CONFIG.mintPath });
+  renderDepositActivity();
+  showToast('Processing deposit…', 'info');
+
+  await advancePaperDeposit(dep, [
+    { state: 'SCREENING', note: 'Verifying transfer…', wait: 350 },
+  ]);
+
+  // Silent per-tx AML (wallet + source) — no extra user notification
+  const txDecision = await silentPerTxScreen('deposit');
+  await silentPerTxScreen('tx_source');
+
+  if (txDecision === 'deny') {
+    await advancePaperDeposit(dep, [
+      { state: 'REJECTED', note: 'Transfer not accepted', wait: 400 },
+      { state: 'QUARANTINED', note: 'Held for return', wait: 400 },
+      { state: 'REFUNDING', note: 'Returning funds…', wait: 500 },
+      { state: 'REFUNDED', note: 'Returned', refund_txid: fakeTxid('rfnd_'), wait: 200 },
+    ]);
+    audit('deposit_refunded', { deposit_id: dep.id, refund_txid: dep.refund_txid });
+    updateUserUI();
+    showToast('Transfer not accepted — funds returned', 'info');
+    return;
+  }
+
+  const nav = getCurrentNAV();
+  const tokens = Math.floor(amount / nav);
+  const att = issuePaperAttestation(dep, tokens);
+  await advancePaperDeposit(dep, [
+    {
+      state: 'CLEAN_READY',
+      note: 'Preparing shares…',
+      wait: 350,
+    },
+    {
+      state: 'ATTESTING',
+      note: 'Confirming…',
+      wait: 400,
+    },
+    {
+      state: 'MINTING',
+      note: 'Confirming…',
+      wait: 500,
+    },
+    {
+      state: 'MINTED',
+      note: tokens + ' $CHILLER',
+      shares: tokens,
+      wait: 200,
+    },
+  ]);
+  audit('attestation_spent', {
+    deposit_id: dep.id,
+    nonce: att.nonce,
+    path: CONFIG.mintPath,
+  });
+
+  STATE.userSolBalance -= amount;
+  STATE.userChillerBalance += tokens;
+  DEMO_VAULT.totalAssets += amount;
+  DEMO_VAULT.totalSupply += tokens;
+  document.getElementById('deposit-amount').value = '';
+  document.getElementById('deposit-receive').textContent = '0 $CHILLER';
+  audit('deposit_minted', { deposit_id: dep.id, tokens, mint_path: CONFIG.mintPath });
+  updateUserUI();
+  updateVaultStats();
+  showToast(`Deposited ${amount} SOL → ${tokens} $CHILLER`, 'success');
 }
 
 async function fetchUserBalances() {
@@ -462,6 +636,7 @@ function updateVaultStats() {
     configItem('Withdrawal Fee', (v.wdFeeBps / 100) + '%', 'Per withdrawal'),
     configItem('Min Deposit', v.minDeposit + ' SOL', ''),
     configItem('Max Daily Withdraw', v.maxWdPerEpoch + ' SOL', 'Per epoch'),
+    configItem('Mint path', 'mint_with_attestation', 'Open deposit disabled'),
     configItem('Status', v.isPaused ? '⏸️ Paused' : '✅ Active', ''),
     configItem('Exchange', 'Bybit sleeve', 'Segregated CEX sub-account'),
     configItem('Contract', CONFIG.programId.slice(0, 8) + '...', ''),
@@ -516,10 +691,10 @@ function setMaxWithdraw() {
   updateWithdrawPreview();
 }
 
-async function executeDeposit() {
-  const amount = parseFloat(document.getElementById('deposit-amount').value);
-  if (!amount || amount < DEMO_VAULT.minDeposit) {
-    showToast('❌ Minimum deposit: ' + DEMO_VAULT.minDeposit + ' SOL', 'error');
+async function executeWithdraw() {
+  const tokens = parseInt(document.getElementById('withdraw-amount').value);
+  if (!tokens || tokens <= 0) {
+    showToast('❌ Enter amount to withdraw', 'error');
     return;
   }
 
@@ -531,73 +706,50 @@ async function executeDeposit() {
     openEligibilityModal();
     return;
   }
-  if (amount > STATE.userSolBalance) {
-    showToast('❌ Insufficient SOL balance', 'error');
-    return;
-  }
-
-  setDepositActionsEnabled(false, 'Processing…');
-  const dep = {
-    id: newDepositId(),
-    amount,
-    state: 'DETECTED',
-    history: [{ state: 'DETECTED', note: 'Inbound SOL (paper)', at: Date.now() }],
-    refund_txid: null,
-    shares: 0,
-  };
-  STATE.deposits.push(dep);
-  renderDepositActivity();
-  showToast('Processing deposit…', 'info');
-
-  const nav = getCurrentNAV();
-  const tokens = Math.floor(amount / nav);
-  await advancePaperDeposit(dep, [
-    { state: 'SCREENING', note: 'KYT on from + tx', wait: 500 },
-    { state: 'CLEAN_READY', note: 'Allow — issue mint attestation', wait: 450 },
-    { state: 'MINTING', note: 'Attestation submitted', wait: 550 },
-    { state: 'MINTED', note: tokens + ' $CHILLER minted', shares: tokens, wait: 200 },
-  ]);
-
-  STATE.userSolBalance -= amount;
-  STATE.userChillerBalance += tokens;
-  DEMO_VAULT.totalAssets += amount;
-  DEMO_VAULT.totalSupply += tokens;
-  document.getElementById('deposit-amount').value = '';
-  document.getElementById('deposit-receive').textContent = '0 $CHILLER';
-  updateUserUI();
-  updateVaultStats();
-  showToast(`Deposited ${amount} SOL → ${tokens} $CHILLER`, 'success');
-}
-
-async function executeWithdraw() {
-  const tokens = parseInt(document.getElementById('withdraw-amount').value);
-  if (!tokens || tokens <= 0) {
-    showToast('❌ Enter amount to withdraw', 'error');
-    return;
-  }
-
   if (tokens > STATE.userChillerBalance) {
     showToast('❌ Insufficient $CHILLER', 'error');
     return;
   }
 
-  showToast('🔄 Processing withdrawal...', 'info');
+  const wd = {
+    id: 'wd_' + Math.random().toString(36).slice(2, 8),
+    amount: tokens,
+    state: 'REQUESTED',
+  };
+  STATE.withdraws.push(wd);
+  audit('withdraw_submit', { withdraw_id: wd.id, tokens });
+  showToast('Processing withdrawal…', 'info');
+  document.getElementById('btn-withdraw').disabled = true;
+  document.getElementById('btn-withdraw').textContent = 'Processing…';
 
-  setTimeout(() => {
-    const nav = getCurrentNAV();
-    const gross = tokens * nav;
-    const fee = gross * (DEMO_VAULT.wdFeeBps / 10000);
-    const net = gross - fee;
-    STATE.userChillerBalance -= tokens;
-    STATE.userSolBalance += net;
-    DEMO_VAULT.totalAssets -= gross;
-    DEMO_VAULT.totalSupply -= tokens;
+  await sleep(400);
+  wd.state = 'SCREENING';
+  // Silent AML before payout — no extra AML toast
+  const decision = await silentPerTxScreen('withdraw');
+  if (decision === 'deny') {
+    wd.state = 'REJECTED';
+    audit('withdraw_rejected', { withdraw_id: wd.id });
     updateUserUI();
-    updateVaultStats();
-    document.getElementById('withdraw-amount').value = '';
-    document.getElementById('withdraw-receive').textContent = '0 SOL';
-    showToast(`✅ Withdrew ${tokens} $CHILLER → ${net.toFixed(4)} SOL`, 'success');
-  }, 1500);
+    showToast('Withdrawal unavailable right now', 'info');
+    return;
+  }
+
+  await sleep(500);
+  const nav = getCurrentNAV();
+  const gross = tokens * nav;
+  const fee = gross * (DEMO_VAULT.wdFeeBps / 10000);
+  const net = gross - fee;
+  STATE.userChillerBalance -= tokens;
+  STATE.userSolBalance += net;
+  DEMO_VAULT.totalAssets -= gross;
+  DEMO_VAULT.totalSupply -= tokens;
+  wd.state = 'PAID';
+  audit('withdraw_paid', { withdraw_id: wd.id, net });
+  updateUserUI();
+  updateVaultStats();
+  document.getElementById('withdraw-amount').value = '';
+  document.getElementById('withdraw-receive').textContent = '0 SOL';
+  showToast(`Withdrew ${tokens} $CHILLER → ${net.toFixed(4)} SOL`, 'success');
 }
 
 // ═══════════════════════════════════════════════

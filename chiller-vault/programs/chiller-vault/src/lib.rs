@@ -114,6 +114,7 @@ pub enum VaultError {
     #[msg("Attestation expired")] AttestationExpired,
     #[msg("Attestation wallet mismatch")] AttestationWalletMismatch,
     #[msg("Attestation authority unauthorized")] AttestationUnauthorized,
+    #[msg("Open deposit deprecated — use mint_with_attestation")] OpenDepositDeprecated,
 }
 
 // ═══════════════════════════════════════════════
@@ -288,47 +289,14 @@ pub mod chiller_vault {
         Ok(())
     }
 
-    /// Deposit SOL → receive $CHILLER tokens
-    /// M-1 FIX: slippage protection via min_tokens_out
-    pub fn deposit(ctx: Context<DepositCtx>, amount: u64, min_tokens_out: u64) -> Result<()> {
-        let v = &ctx.accounts.vault;
-        require!(!v.is_paused, VaultError::VaultPaused);
-        require!(amount > 0, VaultError::ZeroAmount);
-        require!(amount >= v.min_deposit, VaultError::DepositBelowMinimum);
-        let tokens = v.tokens_for_deposit(amount);
-        require!(tokens > 0, VaultError::MathOverflow);
-        // M-1 FIX: slippage check — user specifies minimum acceptable tokens
-        require!(tokens >= min_tokens_out, VaultError::SlippageExceeded);
-        let nav = v.nav_per_token();
-
-        // Transfer SOL: user → sol_vault PDA
-        system_program::transfer(
-            CpiContext::new(ctx.accounts.system_program.to_account_info(), system_program::Transfer {
-                from: ctx.accounts.user.to_account_info(),
-                to: ctx.accounts.sol_vault.to_account_info(),
-            }),
-            amount,
-        )?;
-
-        // Mint $CHILLER to user
-        let seeds = &[b"vault".as_ref(), &[v.bump]];
-        token::mint_to(CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), MintTo {
-            mint: ctx.accounts.chiller_mint.to_account_info(),
-            to: ctx.accounts.user_chiller.to_account_info(),
-            authority: ctx.accounts.vault.to_account_info(),
-        }, &[seeds]), tokens)?;
-
-        let v = &mut ctx.accounts.vault;
-        v.total_assets = v.total_assets.checked_add(amount).ok_or(VaultError::MathOverflow)?;
-        v.total_supply = v.total_supply.checked_add(tokens).ok_or(VaultError::MathOverflow)?;
-        if v.high_water_mark == 0 { v.high_water_mark = v.total_assets; }
-
-        emit!(UserDeposited { user: ctx.accounts.user.key(), sol_amount: amount, chiller_minted: tokens, nav_at_deposit: nav, vault_total_assets: v.total_assets, timestamp: Clock::get()?.unix_timestamp });
-        Ok(())
+    /// Legacy open deposit — **disabled**. Compliance rail is `mint_with_attestation`.
+    /// Kept as an instruction so old clients get a clear error instead of silent mint.
+    pub fn deposit(_ctx: Context<DepositCtx>, _amount: u64, _min_tokens_out: u64) -> Result<()> {
+        err!(VaultError::OpenDepositDeprecated)
     }
 
     /// Mint $CHILLER only with a single-use attestation (authority co-sign + nonce PDA).
-    /// Legacy `deposit` remains for compatibility; attested path is the compliance rail.
+    /// Preferred / only mint path for investors.
     pub fn mint_with_attestation(
         ctx: Context<MintWithAttestationCtx>,
         amount: u64,

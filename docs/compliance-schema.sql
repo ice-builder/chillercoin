@@ -17,14 +17,14 @@ CREATE TABLE IF NOT EXISTS kyt_screens (
   id               BIGSERIAL PRIMARY KEY,
   wallet           TEXT NOT NULL REFERENCES wallets(wallet),
   trigger          TEXT NOT NULL
-                   CHECK (trigger IN ('connect','deposit','topup','periodic','manual')),
-  provider         TEXT NOT NULL,             -- e.g. trm / elliptic / chainalysis / mock
-  external_ref     TEXT,                      -- provider case id
+                   CHECK (trigger IN ('connect','deposit','topup','withdraw','periodic','manual','tx_source')),
+  provider         TEXT NOT NULL,             -- screening vendor id (ops); not shown in UI
+  external_ref     TEXT,                      -- vendor case id
   risk_score       NUMERIC,                   -- internal
   decision         TEXT NOT NULL
                    CHECK (decision IN ('allow','deny','review','error','timeout')),
   reason_code      TEXT,                      -- internal taxonomy; not shown in UI
-  raw_meta         JSONB,                     -- redacted/provider payload (secure store)
+  raw_meta         JSONB,                     -- redacted vendor payload (secure store)
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_kyt_wallet_created ON kyt_screens(wallet, created_at DESC);
@@ -119,6 +119,57 @@ CREATE TABLE IF NOT EXISTS deposit_events (
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_dep_events ON deposit_events(deposit_id, created_at);
+
+CREATE TABLE IF NOT EXISTS withdraws (
+  id                 TEXT PRIMARY KEY,
+  wallet             TEXT NOT NULL REFERENCES wallets(wallet),
+  amount_shares      NUMERIC NOT NULL,
+  amount_lamports_out BIGINT,
+  state              TEXT NOT NULL
+                     CHECK (state IN (
+                       'REQUESTED','SCREENING','APPROVED','PAYING','PAID',
+                       'REJECTED','HOLD_MANUAL','PAUSED'
+                     )),
+  kyt_screen_id      BIGINT REFERENCES kyt_screens(id),
+  withdraw_txid      TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_withdraws_wallet_state ON withdraws(wallet, state);
+
+CREATE TABLE IF NOT EXISTS incidents (
+  id                   BIGSERIAL PRIMARY KEY,
+  wallet               TEXT,
+  kind                 TEXT NOT NULL
+                       CHECK (kind IN (
+                         'kyt_deny_connect','kyt_deny_deposit','kyt_deny_withdraw',
+                         'kyt_review','kyt_timeout','refund_failed','breaker','manual'
+                       )),
+  severity             TEXT NOT NULL DEFAULT 'medium'
+                       CHECK (severity IN ('low','medium','high','critical')),
+  related_deposit_id   TEXT,
+  related_withdraw_id  TEXT,
+  reason_code          TEXT NOT NULL,          -- internal only
+  detail               JSONB,
+  status               TEXT NOT NULL DEFAULT 'open'
+                       CHECK (status IN ('open','ack','closed')),
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  closed_at            TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_incidents_open ON incidents(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS user_audit_events (
+  id           BIGSERIAL PRIMARY KEY,
+  wallet       TEXT,
+  action       TEXT NOT NULL,
+  entity_type  TEXT,
+  entity_id    TEXT,
+  ip_hash      TEXT,
+  user_agent   TEXT,
+  detail       JSONB,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_audit_wallet_created ON user_audit_events(wallet, created_at DESC);
 
 -- Seed breakers
 INSERT INTO circuit_breakers (scope, paused) VALUES
