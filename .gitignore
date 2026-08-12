@@ -62,10 +62,11 @@ chiller-tg-bot/
 vault/
 ZeroChainAI/
 liquidation-hunter-bot/
-src/
-deploy_vps/
-data/
-artifacts/
+# Private monorepo leftovers (root only — do not ignore program src/)
+/src/
+/deploy_vps/
+/data/
+/artifacts/
 dashboard/
 landing/
 deepprotect/
