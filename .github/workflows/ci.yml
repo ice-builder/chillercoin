@@ -10,7 +10,7 @@ jobs:
     name: Public push gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version: "20"
@@ -21,7 +21,7 @@ jobs:
     name: Dashboard syntax
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version: "20"
@@ -35,7 +35,7 @@ jobs:
       run:
         working-directory: chiller-vault
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version: "20"
