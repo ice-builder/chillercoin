@@ -9,6 +9,9 @@
 
 const CONFIG = {
   programId: '7ayYqgiiBtXdk13f9DBFTxJoYKkZyr3AaaLt2f2TPDoH',
+  officialSite: 'https://chillercoin.io',
+  officialApp: 'https://app.chillercoin.io',
+  officialGithub: 'https://github.com/ice-builder/chillercoin',
   /** Public demo defaults — switch rpc/network when vault is live on Solana. */
   rpcUrl: 'https://api.devnet.solana.com',
   network: 'demo',
@@ -681,7 +684,7 @@ function updateVaultStats() {
     configItem('Mint path', 'mint_with_attestation', 'Open deposit disabled'),
     configItem('Status', v.isPaused ? '⏸️ Paused' : '✅ Active', ''),
     configItem('Exchange', 'Bybit sleeve', 'Segregated CEX sub-account'),
-    configItem('Contract', CONFIG.programId.slice(0, 8) + '...', ''),
+    configItem('Contract', CONFIG.programId, 'Official program — reject any other id'),
   ].join('');
 
   // Deposit preview
@@ -690,8 +693,8 @@ function updateVaultStats() {
 
 function configItem(label, value, sub) {
   return `<div class="portfolio-item">
-    <div class="portfolio-item-left"><div><div class="portfolio-name">${label}</div>${sub ? `<div class="portfolio-sub">${sub}</div>` : ''}</div></div>
-    <div class="portfolio-value"><div class="portfolio-amount">${value}</div></div>
+    <div class="portfolio-item-left"><div><div class="portfolio-name">${escapeHtml(label)}</div>${sub ? `<div class="portfolio-sub">${escapeHtml(sub)}</div>` : ''}</div></div>
+    <div class="portfolio-value"><div class="portfolio-amount">${escapeHtml(value)}</div></div>
   </div>`;
 }
 
@@ -1169,8 +1172,14 @@ function initTheme() {
 // Init
 // ═══════════════════════════════════════════════
 
+function fillCanonical() {
+  const el = document.getElementById('canonical-program-id');
+  if (el) el.textContent = CONFIG.programId;
+}
+
 function init() {
   initTheme();
+  fillCanonical();
   const badge = document.getElementById('network-badge');
   if (badge) badge.textContent = (CONFIG.network || 'localnet').toUpperCase();
   generateNavHistory();

@@ -253,6 +253,23 @@ body {
   animation: pulse 2s infinite;
 }
 
+.canonical-strip {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card-bg, rgba(255,255,255,0.03));
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+.canonical-strip a { color: var(--text-primary); }
+.canonical-strip code {
+  font-size: 11px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.5; transform: scale(0.8); }

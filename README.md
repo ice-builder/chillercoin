@@ -33,7 +33,18 @@ $CHILLER is a **share token for a Solana vault**. You deposit SOL into the on-ch
 
 Dirty / ineligible deposits are **not minted** and are **fully refunded** (minus network fee) via a quarantine rail. See `docs/`.
 
-### Key Features
+## Official channels
+
+Copies of this repository are **not** the official vault. Before any transfer, match the program id in your wallet to this table.
+
+| Channel | Canonical |
+|---------|-----------|
+| Site | [chillercoin.io](https://chillercoin.io) |
+| App | [app.chillercoin.io](https://app.chillercoin.io) |
+| GitHub | [ice-builder/chillercoin](https://github.com/ice-builder/chillercoin) |
+| Program ID | `7ayYqgiiBtXdk13f9DBFTxJoYKkZyr3AaaLt2f2TPDoH` |
+
+## Key Features
 
 | Feature | Description |
 |---------|-------------|
