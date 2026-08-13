@@ -1,0 +1,133 @@
+{
+  "version": "1.0.0",
+  "description": "Chiller public feature registry — site + program only. Full catalog is private.",
+  "features": [
+    {
+      "id": "CH-ID-001",
+      "title": "Canonical program id and official channels",
+      "status": "done",
+      "critical": true,
+      "files": [
+        "chiller-dashboard/app.js",
+        "chiller-dashboard/index.html",
+        "README.md"
+      ],
+      "tests": ["features/guards/site-invariants.mjs"],
+      "coverage": "dedicated",
+      "test_type": "static_guard",
+      "assertions": [
+        "CONFIG.programId is 7ayYqgiiBtXdk13f9DBFTxJoYKkZyr3AaaLt2f2TPDoH",
+        "Dashboard strip lists chillercoin.io, app.chillercoin.io, full program id"
+      ]
+    },
+    {
+      "id": "CH-SITE-001",
+      "title": "Dashboard Overview / Trades / Vault + Demo wallets",
+      "status": "done",
+      "critical": true,
+      "files": [
+        "chiller-dashboard/index.html",
+        "chiller-dashboard/app.js",
+        "chiller-dashboard/style.css"
+      ],
+      "tests": ["features/guards/site-invariants.mjs"],
+      "coverage": "dedicated",
+      "test_type": "static_guard",
+      "assertions": [
+        "Pages overview, trades, vault exist",
+        "Demo Mode / Demo Ineligible present; default network demo"
+      ]
+    },
+    {
+      "id": "CH-MINT-001",
+      "title": "Attested mint path (open deposit deprecated)",
+      "status": "done",
+      "critical": true,
+      "files": [
+        "chiller-dashboard/app.js",
+        "chiller-vault/programs/chiller-vault/src/lib.rs",
+        "chiller-vault/tests/attestation_bankrun.ts"
+      ],
+      "tests": [
+        "features/guards/site-invariants.mjs",
+        "chiller-vault/tests/attestation_bankrun.ts"
+      ],
+      "coverage": "integration",
+      "test_type": "integration",
+      "assertions": [
+        "mintPath is mint_with_attestation",
+        "Program returns OpenDepositDeprecated on open deposit"
+      ]
+    },
+    {
+      "id": "CH-TRADE-001",
+      "title": "On-chain log_trade",
+      "status": "done",
+      "critical": true,
+      "files": [
+        "chiller-vault/programs/chiller-vault/src/lib.rs",
+        "chiller-vault/tests/vault.ts"
+      ],
+      "tests": ["chiller-vault/tests/vault.ts"],
+      "coverage": "integration",
+      "test_type": "integration",
+      "assertions": [
+        "log_trade instruction exists",
+        "vault.ts covers TradeSide enum log"
+      ]
+    },
+    {
+      "id": "CH-FEED-001",
+      "title": "Trades tab reads on-chain TradeLogged; site does not fetch trader",
+      "status": "done",
+      "critical": true,
+      "files": [
+        "chiller-dashboard/app.js",
+        "chiller-dashboard/js/onchain-trades.js",
+        "chiller-dashboard/data/onchain-trades.json",
+        "site/trades.html"
+      ],
+      "tests": ["features/guards/site-invariants.mjs"],
+      "coverage": "dedicated",
+      "test_type": "static_guard",
+      "assertions": [
+        "Default tradesSource is rpc",
+        "site/trades.html uses the same decoder as the app",
+        "app.js does not reference vault_bridge or trader hosts",
+        "localhost preview does not auto-switch to 127.0.0.1:8899"
+      ]
+    },
+    {
+      "id": "CH-PAUSE-001",
+      "title": "Emergency pause",
+      "status": "done",
+      "critical": true,
+      "files": ["chiller-vault/programs/chiller-vault/src/lib.rs"],
+      "tests": ["chiller-vault/tests/attestation_bankrun.ts"],
+      "coverage": "integration",
+      "test_type": "integration",
+      "assertions": [
+        "set_paused exists",
+        "attestation_bankrun exercises pause"
+      ]
+    },
+    {
+      "id": "CH-PUSH-001",
+      "title": "Public push audit",
+      "status": "done",
+      "critical": true,
+      "files": [
+        "scripts/public-push-audit.mjs",
+        "scripts/public-push-policy.json",
+        "docs/PUBLIC_PRIVATE_BOUNDARY.md"
+      ],
+      "tests": ["scripts/public-push-audit.mjs"],
+      "coverage": "dedicated",
+      "test_type": "static_guard",
+      "assertions": [
+        "Audit script exists and loads policy",
+        "Boundary doc exists"
+      ]
+    }
+  ]
+}

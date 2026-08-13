@@ -12,12 +12,16 @@ const CONFIG = {
   officialSite: 'https://chillercoin.io',
   officialApp: 'https://app.chillercoin.io',
   officialGithub: 'https://github.com/ice-builder/chillercoin',
+  vaultPda: '5y4PGY6KkXE1Cdgiz7UaHvUXjWFtdyje4zdgz8pAse62',
   /** Public demo defaults — switch rpc/network when vault is live on Solana. */
   rpcUrl: 'https://api.devnet.solana.com',
   network: 'demo',
   explorerBase: 'https://solscan.io/tx/',
   explorerSuffix: '?cluster=devnet',
   tradesFeedUrl: 'data/onchain-trades.json',
+  /** rpc = public Solana TradeLogged tape; json = static cache fallback. */
+  tradesSource: 'rpc',
+  loggerPubkey: 'GFSkeQW77EMvZhu8UBut1QFjgzREv3oiLCGM77KdznpU',
   LAMPORTS: 1_000_000_000,
   CHILLER_DECIMALS: 1_000_000,
   NAV_INITIAL: 0.01, // SOL per $CHILLER
@@ -26,6 +30,59 @@ const CONFIG = {
   mintPath: 'mint_with_attestation',
   attestationTtlSec: 20 * 60,
 };
+
+/** Anchor event discriminator: sha256("event:TradeLogged")[0..8] */
+const TRADE_LOGGED_DISC = [0xa8, 0xcc, 0x72, 0x96, 0x96, 0x7b, 0x6c, 0x4d];
+
+const TRADE_UI = {
+  filter: 'all',
+  query: '',
+  loading: false,
+  error: '',
+};
+
+function isLoopbackHost(host) {
+  const h = String(host || '').replace(/^\[|\]$/g, '');
+  return h === '127.0.0.1' || h === 'localhost' || h === '::1';
+}
+
+function isLoopbackRpcUrl(url) {
+  try {
+    const u = new URL(url);
+    return (u.protocol === 'http:' || u.protocol === 'https:') && isLoopbackHost(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function applyLocalRpcConfig() {
+  if (typeof location === 'undefined') return;
+  const params = new URLSearchParams(location.search);
+  const rpc = (params.get('rpc') || '').trim();
+  const cluster = (params.get('cluster') || params.get('network') || '').trim();
+  if (rpc) {
+    if (!isLoopbackRpcUrl(rpc)) {
+      console.warn('Ignoring rpc= — only loopback RPC is allowed');
+      return;
+    }
+    CONFIG.rpcUrl = rpc.replace(/\/$/, '');
+    CONFIG.tradesSource = 'rpc';
+    return;
+  }
+  if (cluster === 'demo') return;
+  if (cluster === 'devnet') {
+    CONFIG.rpcUrl = 'https://api.devnet.solana.com';
+    CONFIG.network = 'devnet';
+    CONFIG.tradesSource = 'rpc';
+    CONFIG.explorerSuffix = '?cluster=devnet';
+    return;
+  }
+  if (cluster === 'localnet') {
+    CONFIG.rpcUrl = 'http://127.0.0.1:8899';
+    CONFIG.tradesSource = 'rpc';
+    CONFIG.network = 'localnet';
+  }
+}
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -319,7 +376,12 @@ async function runEligibilityCheck(opts = {}) {
     STATE.eligibilityStatus = 'allow';
     updateUserUI();
     // Soft success only — no AML wording
-    showToast('Wallet connected', 'success');
+    showToast(
+      isDemoMode()
+        ? 'Demo wallet eligible — use Deposit for a paper mint (not on-chain)'
+        : 'Wallet connected',
+      isDemoMode() ? 'info' : 'success'
+    );
   } else {
     STATE.eligible = false;
     STATE.eligibilityStatus = 'deny';
@@ -667,7 +729,14 @@ function updateVaultStats() {
   // Trades page
   document.getElementById('trades-total').textContent = v.totalTrades;
   document.getElementById('trades-winrate').textContent = winrate + '%';
-  document.getElementById('trades-pnl').textContent = '+' + (v.cumulativePnlBps / 100).toFixed(2) + '%';
+  const pnlBps = v.cumulativePnlBps || 0;
+  const pnlSign = pnlBps >= 0 ? '+' : '';
+  document.getElementById('trades-pnl').textContent = pnlSign + (pnlBps / 100).toFixed(2) + '%';
+  const pnlEl = document.getElementById('trades-pnl');
+  if (pnlEl) {
+    pnlEl.classList.toggle('profit', pnlBps >= 0);
+    pnlEl.classList.toggle('loss', pnlBps < 0);
+  }
 
   // Vault page
   document.getElementById('vault-assets').textContent = v.totalAssets.toFixed(2) + ' SOL';
@@ -848,37 +917,81 @@ const PAIR_ICONS = {
   'DOGE-PERP': '🐕', 'AVAX-PERP': '🔺', 'LINK-PERP': '⬡',
 };
 
+function pairGlyph(pair) {
+  if (window.ChillerOnchainTrades) return ChillerOnchainTrades.pairIcon(pair);
+  return PAIR_ICONS[pair] || '•';
+}
+
+function filteredTrades() {
+  const q = TRADE_UI.query.trim().toUpperCase();
+  return ONCHAIN_TRADES.filter((t) => {
+    const side = String(t.side || '').toUpperCase();
+    const pnl = t.pnl_bps || 0;
+    if (TRADE_UI.filter === 'long' && side !== 'LONG') return false;
+    if (TRADE_UI.filter === 'short' && side !== 'SHORT') return false;
+    if (TRADE_UI.filter === 'win' && pnl <= 0) return false;
+    if (TRADE_UI.filter === 'loss' && pnl >= 0) return false;
+    if (q && !String(t.pair || '').toUpperCase().includes(q)) return false;
+    return true;
+  });
+}
+
+function setTradeFilter(filter) {
+  TRADE_UI.filter = filter;
+  document.querySelectorAll('.trade-filter').forEach((el) => {
+    el.classList.toggle('active', el.getAttribute('data-filter') === filter);
+  });
+  renderTrades();
+}
+
+function setTradeQuery(value) {
+  TRADE_UI.query = value || '';
+  renderTrades();
+}
+
 function renderTrades() {
   const recentBody = document.getElementById('recent-trades-body');
   const allBody = document.getElementById('all-trades-body');
-  const list = ONCHAIN_TRADES;
+  const note = document.getElementById('trades-feed-note');
+  const pageCopy = document.getElementById('trades-page-copy');
 
-  if (!list.length) {
-    const msg =
-      'No on-chain trades published yet. After vault go-live, closed sleeve trades appear here with Solana signatures.';
-    const emptyRecent = `<tr><td colspan="6" style="opacity:.7;padding:16px">${msg}</td></tr>`;
-    const emptyAll = `<tr><td colspan="9" style="opacity:.7;padding:16px">${msg}</td></tr>`;
-    if (recentBody) recentBody.innerHTML = emptyRecent;
-    if (allBody) allBody.innerHTML = emptyAll;
-    const note = document.getElementById('trades-feed-note');
+  if (TRADE_UI.loading && !ONCHAIN_TRADES.length) {
+    const load = '<tr><td colspan="9" class="trades-empty">Loading on-chain tape…</td></tr>';
+    if (recentBody) recentBody.innerHTML = load.replace('colspan="9"', 'colspan="6"');
+    if (allBody) allBody.innerHTML = load;
+    return;
+  }
+
+  const list = filteredTrades().map(normalizeTrade);
+
+  if (!ONCHAIN_TRADES.length) {
+    const msg = TRADE_UI.error
+      ? 'Could not read Solana RPC. Trades appear here after closed sleeve fills are logged on-chain.'
+      : 'No on-chain trades yet. Closed sleeve fills show up here with Solana signatures. No yield is promised.';
+    if (recentBody) recentBody.innerHTML = `<tr><td colspan="6" class="trades-empty">${msg}</td></tr>`;
+    if (allBody) allBody.innerHTML = `<tr><td colspan="9" class="trades-empty">${msg}</td></tr>`;
     if (note) {
       note.hidden = false;
-      note.textContent =
-        CONFIG.network === 'demo'
-          ? 'Demo mode — trade feed stays empty until the vault is deployed and log_trade is live. No yield is promised.'
-          : 'Waiting for on-chain trade events.';
+      note.textContent = msg;
     }
     return;
   }
-  const note = document.getElementById('trades-feed-note');
-  if (note) note.hidden = true;
+    if (note) note.hidden = true;
+  if (pageCopy) {
+    pageCopy.innerHTML =
+      'Closed sleeve trades from Solana <code>TradeLogged</code>. Same tape as <a href="https://chillercoin.io/trades.html" target="_blank" rel="noopener">chillercoin.io/trades</a>. Signatures are public. No yield is promised.';
+  }
 
-  const mapped = list.map(normalizeTrade);
-  if (recentBody) recentBody.innerHTML = mapped.slice(0, 8).map(tradeRow).join('');
-  if (allBody) allBody.innerHTML = mapped.map(tradeRowFull).join('');
+  if (recentBody) recentBody.innerHTML = list.slice(0, 8).map(tradeRow).join('');
+  if (allBody) {
+    allBody.innerHTML = list.length
+      ? list.map(tradeRowFull).join('')
+      : '<tr><td colspan="9" class="trades-empty">No trades match this filter.</td></tr>';
+  }
 }
 
 function normalizeTrade(t) {
+  const ts = t.ts || t.time || 0;
   return {
     pair: t.pair || t.symbol || '—',
     side: (t.side || 'LONG').toUpperCase(),
@@ -886,44 +999,269 @@ function normalizeTrade(t) {
     exit: t.exit,
     pnl_bps: t.pnl_bps || 0,
     duration: t.duration || 0,
-    time: (t.ts ? t.ts * 1000 : Date.now()),
+    nav_after: t.nav_after,
+    time: ts > 1e12 ? ts : ts * 1000,
+    ts: ts > 1e12 ? Math.floor(ts / 1000) : ts,
     tx: t.sig || t.tx || '',
   };
 }
 
+function applyTradesToState(rows) {
+  ONCHAIN_TRADES = rows;
+  STATE.trades = ONCHAIN_TRADES;
+  const s = window.ChillerOnchainTrades
+    ? ChillerOnchainTrades.stats(ONCHAIN_TRADES)
+    : { n: rows.length, wins: 0, winrate: 0, pnlBps: 0 };
+  DEMO_VAULT.totalTrades = s.n;
+  DEMO_VAULT.totalWins = s.wins;
+  DEMO_VAULT.cumulativePnlBps = s.pnlBps;
+}
+
 async function loadOnchainTrades() {
+  TRADE_UI.loading = true;
+  TRADE_UI.error = '';
+  renderTrades();
   try {
+    if (CONFIG.tradesSource === 'rpc' && window.ChillerOnchainTrades && !isLoopbackRpcUrl(CONFIG.rpcUrl)) {
+      const rows = await ChillerOnchainTrades.fetchTrades({
+        rpcUrl: CONFIG.rpcUrl,
+        programId: CONFIG.programId,
+        vaultPda: CONFIG.vaultPda,
+        loggerPubkey: CONFIG.loggerPubkey,
+        explorerBase: CONFIG.explorerBase,
+        explorerSuffix: CONFIG.explorerSuffix,
+      });
+      applyTradesToState(rows);
+      TRADE_UI.loading = false;
+      renderTrades();
+      updateVaultStats();
+      return;
+    }
+    if (CONFIG.tradesSource === 'rpc') {
+      const rows = await fetchTradesFromRpc();
+      if (rows.length) {
+        applyTradesToState(rows);
+        TRADE_UI.loading = false;
+        renderTrades();
+        updateVaultStats();
+        return;
+      }
+    }
     const resp = await fetch(CONFIG.tradesFeedUrl + '?t=' + Date.now(), { cache: 'no-store' });
     if (!resp.ok) throw new Error('feed ' + resp.status);
     const data = await resp.json();
-    ONCHAIN_TRADES = Array.isArray(data) ? data : [];
-    STATE.trades = ONCHAIN_TRADES;
-    if (ONCHAIN_TRADES.length) {
-      DEMO_VAULT.totalTrades = Math.max(DEMO_VAULT.totalTrades, ONCHAIN_TRADES.length);
-      DEMO_VAULT.totalWins = ONCHAIN_TRADES.filter((t) => (t.pnl_bps || 0) > 0).length;
-      DEMO_VAULT.cumulativePnlBps = ONCHAIN_TRADES.reduce((s, t) => s + (t.pnl_bps || 0), 0);
-    }
+    applyTradesToState(Array.isArray(data) ? data : []);
   } catch (e) {
-    console.warn('on-chain trades feed:', e.message || e);
+    TRADE_UI.error = String(e.message || e);
+    console.warn('on-chain trades feed:', TRADE_UI.error);
     ONCHAIN_TRADES = ONCHAIN_TRADES || [];
   }
+  TRADE_UI.loading = false;
   renderTrades();
   updateVaultStats();
+}
+
+async function rpcCall(method, params) {
+  const resp = await fetch(CONFIG.rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  });
+  const data = await resp.json();
+  if (data.error) throw new Error(data.error.message || method);
+  return data.result;
+}
+
+async function rpcBatch(calls) {
+  if (!calls.length) return [];
+  const body = calls.map((c, i) => ({ jsonrpc: '2.0', id: i + 1, method: c.method, params: c.params }));
+  const resp = await fetch(CONFIG.rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await resp.json();
+  const arr = Array.isArray(data) ? data.slice() : [data];
+  arr.sort((a, b) => (a.id || 0) - (b.id || 0));
+  return arr.map((x) => (x && x.result !== undefined ? x.result : null));
+}
+
+async function fetchTradesFromRpc() {
+  if (isLoopbackRpcUrl(CONFIG.rpcUrl)) {
+    return fetchTradesFromRecentBlocks();
+  }
+  return fetchTradesFromAddressIndex();
+}
+
+async function fetchTradesFromAddressIndex() {
+  if (window.ChillerOnchainTrades) {
+    return ChillerOnchainTrades.fetchTrades({
+      rpcUrl: CONFIG.rpcUrl,
+      programId: CONFIG.programId,
+      vaultPda: CONFIG.vaultPda,
+      loggerPubkey: CONFIG.loggerPubkey,
+    });
+  }
+  const addrs = [CONFIG.loggerPubkey, CONFIG.programId, CONFIG.vaultPda].filter(Boolean);
+  const seen = new Set();
+  const sigs = [];
+  for (const addr of addrs) {
+    const rows = (await rpcCall('getSignaturesForAddress', [addr, { limit: 40 }])) || [];
+    for (const row of rows) {
+      if (!row || !row.signature || seen.has(row.signature)) continue;
+      seen.add(row.signature);
+      sigs.push(row.signature);
+    }
+  }
+  const txs = await rpcBatch(
+    sigs.map((signature) => ({
+      method: 'getTransaction',
+      params: [signature, { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }],
+    }))
+  );
+  return collectTradesFromTransactions(txs, sigs);
+}
+
+async function fetchTradesFromRecentBlocks() {
+  const slot = await rpcCall('getSlot', []);
+  const from = Math.max(0, slot - 2500);
+  const calls = [];
+  for (let s = slot; s >= from; s--) {
+    calls.push({
+      method: 'getBlock',
+      params: [s, {
+        encoding: 'json',
+        transactionDetails: 'full',
+        rewards: false,
+        maxSupportedTransactionVersion: 0,
+      }],
+    });
+  }
+  const trades = [];
+  const seen = new Set();
+  const chunk = 40;
+  for (let i = 0; i < calls.length; i += chunk) {
+    const blocks = await rpcBatch(calls.slice(i, i + chunk));
+    for (const block of blocks) {
+      const txs = block && block.transactions;
+      if (!txs) continue;
+      for (const tx of txs) {
+        const sig = tx.transaction && tx.transaction.signatures && tx.transaction.signatures[0];
+        const logs = tx.meta && tx.meta.logMessages;
+        const row = parseTradeLoggedFromLogs(logs, sig);
+        if (!row || seen.has(row.sig)) continue;
+        seen.add(row.sig);
+        trades.push(row);
+      }
+    }
+  }
+  trades.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return trades;
+}
+
+function collectTradesFromTransactions(txs, sigs) {
+  const trades = [];
+  const seen = new Set();
+  for (let i = 0; i < txs.length; i++) {
+    const tx = txs[i];
+    if (!tx || !tx.meta) continue;
+    const sig = sigs[i] || (tx.transaction && tx.transaction.signatures && tx.transaction.signatures[0]);
+    const row = parseTradeLoggedFromLogs(tx.meta.logMessages, sig);
+    if (!row || seen.has(row.sig)) continue;
+    seen.add(row.sig);
+    trades.push(row);
+  }
+  trades.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return trades;
+}
+
+function parseTradeLoggedFromLogs(logs, sig) {
+  if (!logs || !logs.length) return null;
+  for (let i = 0; i < logs.length; i++) {
+    const line = logs[i];
+    if (typeof line !== 'string' || line.indexOf('Program data: ') !== 0) continue;
+    const bytes = b64ToBytes(line.slice('Program data: '.length).trim());
+    if (!bytes || bytes.length < 24) continue;
+    let match = true;
+    for (let d = 0; d < 8; d++) {
+      if (bytes[d] !== TRADE_LOGGED_DISC[d]) { match = false; break; }
+    }
+    if (!match) continue;
+    return decodeTradeLogged(bytes, sig);
+  }
+  return null;
+}
+
+function b64ToBytes(b64) {
+  try {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+function decodeTradeLogged(bytes, sig) {
+  if (window.ChillerOnchainTrades) {
+    return ChillerOnchainTrades.decodeTradeLogged(bytes, sig);
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let off = 8;
+  const pair = readBorshString(bytes, view, off); off = pair.next;
+  const side = readBorshString(bytes, view, off); off = side.next;
+  const entry = Number(view.getBigUint64(off, true)) / 1e6; off += 8;
+  const exitPx = Number(view.getBigUint64(off, true)) / 1e6; off += 8;
+  const pnl_bps = view.getInt32(off, true); off += 4;
+  const pnl_usdt = Number(view.getBigInt64(off, true)) / 1e6; off += 8;
+  const duration = Number(view.getBigUint64(off, true)); off += 8;
+  off += 16;
+  const ts = Number(view.getBigInt64(off, true));
+  return {
+    pair: pair.value,
+    side: side.value,
+    entry,
+    exit: exitPx,
+    pnl_bps,
+    pnl_usdt,
+    duration,
+    ts,
+    sig: sig || '',
+  };
+}
+
+function readBorshString(bytes, view, off) {
+  const len = view.getUint32(off, true);
+  const start = off + 4;
+  const value = new TextDecoder().decode(bytes.subarray(start, start + len));
+  return { value, next: start + len };
+}
+
+function tradeTxCell(sig) {
+  const api = window.ChillerOnchainTrades;
+  const raw = String(sig || '');
+  const ok = api ? api.isValidSig(raw) : /^[1-9A-HJ-NP-Za-km-z]{32,88}$/.test(raw);
+  if (!ok) return '—';
+  const txShort = escapeHtml(raw.slice(0, 8) + '…' + raw.slice(-4));
+  if (!CONFIG.explorerBase || isLoopbackRpcUrl(CONFIG.rpcUrl)) {
+    return `<span class="tx-link" title="${escapeHtml(raw)}">${txShort}</span>`;
+  }
+  const href = api
+    ? api.explorerUrl(CONFIG, raw)
+    : CONFIG.explorerBase + raw + CONFIG.explorerSuffix;
+  return `<a class="tx-link" href="${escapeHtml(href)}" target="_blank" rel="noopener">${txShort}</a>`;
 }
 
 function tradeRow(t) {
   const isWin = t.pnl_bps > 0;
   const pnl = (t.pnl_bps / 100).toFixed(2);
-  const dur = formatDuration(t.duration);
-  const time = formatTime(t.time);
+  const dur = window.ChillerOnchainTrades ? ChillerOnchainTrades.formatDuration(t.duration) : formatDuration(t.duration);
+  const time = window.ChillerOnchainTrades ? ChillerOnchainTrades.formatTime(t.ts || t.time / 1000) : formatTime(t.time);
   const pair = escapeHtml(t.pair);
   const side = escapeHtml(t.side);
-  const icon = escapeHtml(PAIR_ICONS[t.pair] || '•');
-  const safeTx = /^[1-9A-HJ-NP-Za-km-z]{32,88}$/.test(String(t.tx || '')) ? t.tx : '';
-  const txShort = safeTx ? escapeHtml(safeTx.slice(0, 8) + '…' + safeTx.slice(-4)) : '—';
-  const txCell = safeTx
-    ? `<a class="tx-link" href="${escapeHtml(CONFIG.explorerBase)}${escapeHtml(safeTx)}${escapeHtml(CONFIG.explorerSuffix)}" target="_blank" rel="noopener">${txShort}</a>`
-    : '—';
+  const icon = escapeHtml(pairGlyph(t.pair));
+  const txCell = tradeTxCell(t.tx);
 
   return `<tr>
     <td><div class="pair-cell"><span class="pair-icon">${icon}</span>${pair}</div></td>
@@ -938,28 +1276,23 @@ function tradeRow(t) {
 function tradeRowFull(t) {
   const isWin = t.pnl_bps > 0;
   const pnl = (t.pnl_bps / 100).toFixed(2);
-  const dur = formatDuration(t.duration);
-  const time = formatTime(t.time);
+  const dur = window.ChillerOnchainTrades ? ChillerOnchainTrades.formatDuration(t.duration) : formatDuration(t.duration);
+  const time = window.ChillerOnchainTrades ? ChillerOnchainTrades.formatTime(t.ts || t.time / 1000) : formatTime(t.time);
   const pair = escapeHtml(t.pair);
   const side = escapeHtml(t.side);
-  const icon = escapeHtml(PAIR_ICONS[t.pair] || '•');
-  const nav = getCurrentNAV();
-  const safeTx = /^[1-9A-HJ-NP-Za-km-z]{32,88}$/.test(String(t.tx || '')) ? t.tx : '';
-  const txShort = safeTx ? escapeHtml(safeTx.slice(0, 8) + '…' + safeTx.slice(-4)) : '—';
-  const txCell = safeTx
-    ? `<a class="tx-link" href="${escapeHtml(CONFIG.explorerBase)}${escapeHtml(safeTx)}${escapeHtml(CONFIG.explorerSuffix)}" target="_blank" rel="noopener">${txShort}</a>`
-    : '—';
-  const entry = Number(t.entry || 0);
-  const exit = Number(t.exit || 0);
+  const icon = escapeHtml(pairGlyph(t.pair));
+  const txCell = tradeTxCell(t.tx);
+  const px = window.ChillerOnchainTrades ? ChillerOnchainTrades.formatPx : (n) => Number(n || 0).toLocaleString();
+  const nav = t.nav_after != null ? Number(t.nav_after).toFixed(4) : '—';
 
   return `<tr>
     <td><div class="pair-cell"><span class="pair-icon">${icon}</span>${pair}</div></td>
     <td><span class="side-badge ${side.toLowerCase()}">${side}</span></td>
-    <td style="font-family:var(--font-mono)">$${escapeHtml(entry.toLocaleString(undefined,{maximumFractionDigits:4}))}</td>
-    <td style="font-family:var(--font-mono)">$${escapeHtml(exit.toLocaleString(undefined,{maximumFractionDigits:4}))}</td>
+    <td class="mono-cell">$${escapeHtml(px(t.entry))}</td>
+    <td class="mono-cell">$${escapeHtml(px(t.exit))}</td>
     <td><span class="pnl-cell ${isWin ? 'profit' : 'loss'}">${isWin ? '+' : ''}${escapeHtml(pnl)}%</span></td>
     <td>${escapeHtml(dur)}</td>
-    <td style="font-family:var(--font-mono)">${escapeHtml(nav.toFixed(4))}</td>
+    <td class="mono-cell">${escapeHtml(nav)}</td>
     <td>${escapeHtml(time)}</td>
     <td>${txCell}</td>
   </tr>`;
@@ -1115,6 +1448,9 @@ function showPage(page) {
 
   const titles = { overview: 'Overview', trades: 'Trades', vault: 'Vault' };
   document.getElementById('page-title').textContent = titles[page] || page;
+  if (location.hash !== '#' + page) {
+    history.replaceState(null, '', '#' + page);
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -1177,16 +1513,63 @@ function fillCanonical() {
   if (el) el.textContent = CONFIG.programId;
 }
 
+function updateTradeSourceBadges() {
+  const rpc = CONFIG.tradesSource === 'rpc';
+  const loop = isLoopbackRpcUrl(CONFIG.rpcUrl);
+  const label = rpc
+    ? (loop ? 'Local RPC · this machine' : 'Solana · on-chain')
+    : 'On-chain when live';
+  const title = rpc
+    ? (loop
+      ? 'TradeLogged events from loopback Solana RPC — not a public trader feed'
+      : 'TradeLogged events from Solana RPC — public trade tape')
+    : 'Empty until live log_trade';
+  ['trades-source-badge', 'trades-source-badge-all'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = label;
+    el.title = title;
+  });
+  const pageCopy = document.getElementById('trades-page-copy');
+  if (pageCopy && rpc && !loop) {
+    pageCopy.innerHTML =
+      'Closed sleeve trades from Solana <code>TradeLogged</code>. Same tape as <a href="https://chillercoin.io/trades.html" target="_blank" rel="noopener">chillercoin.io/trades</a>. Signatures are public. No yield is promised.';
+  } else if (pageCopy && rpc) {
+    pageCopy.textContent =
+      'Read from this machine’s validator (127.0.0.1:8899). Signatures stay local — Solscan will not have them. No yield is promised.';
+  }
+  const banner = document.querySelector('.demo-banner');
+  if (banner && rpc && !loop) {
+    banner.innerHTML =
+      'Deposits stay paper until go-live. <b>Trades</b> are read from Solana (<code>TradeLogged</code>) — not from the trader host.';
+  } else if (banner && rpc) {
+    banner.innerHTML =
+      'Paper demo for deposits. Trades are read from <b>this machine</b> (<code>127.0.0.1:8899</code>) — no public RPC, no trader VPS.';
+  }
+}
+
 function init() {
+  applyLocalRpcConfig();
   initTheme();
   fillCanonical();
   const badge = document.getElementById('network-badge');
-  if (badge) badge.textContent = (CONFIG.network || 'localnet').toUpperCase();
+  if (badge) {
+    badge.textContent = CONFIG.tradesSource === 'rpc' && isLoopbackRpcUrl(CONFIG.rpcUrl)
+      ? 'LOCAL RPC'
+      : (CONFIG.network || 'devnet').toUpperCase();
+  }
+  updateTradeSourceBadges();
   generateNavHistory();
   updateVaultStats();
   drawNavChart();
   renderDepositActivity();
   loadOnchainTrades();
+  const hash = (location.hash || '').replace('#', '');
+  if (hash === 'trades' || hash === 'vault' || hash === 'overview') showPage(hash);
+  window.addEventListener('hashchange', () => {
+    const p = (location.hash || '').replace('#', '');
+    if (p === 'trades' || p === 'vault' || p === 'overview') showPage(p);
+  });
 
   window.addEventListener('resize', () => drawNavChart());
 

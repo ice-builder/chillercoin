@@ -5,12 +5,14 @@
 #
 # Required env (or ~/.config/chiller/deploy.env / ./.deploy.env — gitignored):
 #   VPS_HOST, VPS_USER, VPS_PORT, SSH_KEY, REMOTE_BASE
+#   LANDING_DIR — local path to private landing source (not in this repo)
 # ═══════════════════════════════════════════════
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
+SITE_DIR="$(cd "$SCRIPT_DIR/../site" && pwd)"
 
 if [[ -f "$HOME/.config/chiller/deploy.env" ]]; then
   # shellcheck disable=SC1090
@@ -46,14 +48,30 @@ check_connection() {
 }
 
 deploy_landing() {
+  : "${LANDING_DIR:?Set LANDING_DIR to the local landing source}"
+  [[ -d "$LANDING_DIR" ]] || err "LANDING_DIR is not a directory"
   log "Deploying landing page..."
-  "${SCP_CMD[@]}" -r ../chiller-landing/* "$VPS_USER@$VPS_HOST:$REMOTE_BASE/landing/" 2>&1
-  ok "Landing deployed"
+  "${SCP_CMD[@]}" -r "$LANDING_DIR/." "$VPS_USER@$VPS_HOST:$REMOTE_BASE/landing/"
+  log "Publishing on-chain trades page onto the landing host..."
+  "${SCP_CMD[@]}" "$SITE_DIR/trades.html" "$SITE_DIR/trades.css" "$SITE_DIR/trades.js" \
+    "$VPS_USER@$VPS_HOST:$REMOTE_BASE/landing/"
+  "${SSH_CMD[@]}" "mkdir -p '$REMOTE_BASE/landing/js'"
+  "${SCP_CMD[@]}" "$SITE_DIR/js/onchain-trades.js" "$VPS_USER@$VPS_HOST:$REMOTE_BASE/landing/js/"
+  ok "Landing + public tape deployed"
 }
 
 deploy_dashboard() {
   log "Deploying dashboard..."
-  "${SCP_CMD[@]}" ./index.html ./style.css ./app.js ./logo.png "$VPS_USER@$VPS_HOST:$REMOTE_BASE/dashboard/" 2>&1
+  "${SSH_CMD[@]}" "mkdir -p '$REMOTE_BASE/dashboard/js' '$REMOTE_BASE/dashboard/data'"
+  "${SCP_CMD[@]}" ./index.html ./style.css ./app.js ./manifest.json \
+    "$VPS_USER@$VPS_HOST:$REMOTE_BASE/dashboard/"
+  if [[ -f ./logo.png ]]; then
+    "${SCP_CMD[@]}" ./logo.png "$VPS_USER@$VPS_HOST:$REMOTE_BASE/dashboard/"
+  fi
+  "${SCP_CMD[@]}" ./js/onchain-trades.js "$VPS_USER@$VPS_HOST:$REMOTE_BASE/dashboard/js/"
+  if [[ -f ./data/onchain-trades.json ]]; then
+    "${SCP_CMD[@]}" ./data/onchain-trades.json "$VPS_USER@$VPS_HOST:$REMOTE_BASE/dashboard/data/"
+  fi
   ok "Dashboard deployed"
 }
 
@@ -82,7 +100,7 @@ case "$TARGET" in
     reload_nginx
     ;;
   *)
-    echo "Usage: VPS_HOST=… VPS_USER=… VPS_PORT=… SSH_KEY=… REMOTE_BASE=… ./deploy.sh [landing|dashboard|all]"
+    echo "Usage: VPS_HOST=… VPS_USER=… VPS_PORT=… SSH_KEY=… REMOTE_BASE=… LANDING_DIR=… ./deploy.sh [landing|dashboard|all]"
     exit 1
     ;;
 esac

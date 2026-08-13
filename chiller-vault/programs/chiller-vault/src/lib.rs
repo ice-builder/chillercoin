@@ -5,6 +5,18 @@ use anchor_spl::token::{self, Burn, Mint, MintTo, Token};
 
 declare_id!("7ayYqgiiBtXdk13f9DBFTxJoYKkZyr3AaaLt2f2TPDoH");
 
+#[cfg(not(feature = "no-entrypoint"))]
+use solana_security_txt::security_txt;
+
+#[cfg(not(feature = "no-entrypoint"))]
+security_txt! {
+    name: "Chiller Vault",
+    project_url: "https://chillercoin.io",
+    contacts: "link:https://github.com/ice-builder/chillercoin/security/advisories/new",
+    policy: "https://github.com/ice-builder/chillercoin/blob/main/SECURITY.md",
+    source_code: "https://github.com/ice-builder/chillercoin"
+}
+
 // ═══════════════════════════════════════════════
 // SOL Treasury PDA — owned by our program
 // ═══════════════════════════════════════════════
@@ -12,6 +24,15 @@ declare_id!("7ayYqgiiBtXdk13f9DBFTxJoYKkZyr3AaaLt2f2TPDoH");
 /// Empty account owned by the program, holds SOL as treasury
 #[account]
 pub struct SolTreasury {
+    pub bump: u8,
+}
+
+/// Separate PDA so we do not resize already-initialized VaultState.
+/// Holds the only extra signer allowed on `log_trade` (not mint/pause/drain).
+#[account]
+#[derive(InitSpace)]
+pub struct TradeLoggerConfig {
+    pub logger: Pubkey,
     pub bump: u8,
 }
 
@@ -254,6 +275,9 @@ pub struct VaultDrained { pub amount: u64, pub remaining: u64, pub timestamp: i6
 
 #[event]
 pub struct VaultFunded { pub amount: u64, pub new_balance: u64, pub timestamp: i64 }
+
+#[event]
+pub struct TradeLoggerSet { pub logger: Pubkey, pub set_by: Pubkey, pub timestamp: i64 }
 
 // ═══════════════════════════════════════════════
 // Program
@@ -769,14 +793,36 @@ pub mod chiller_vault {
         Ok(())
     }
 
-    /// Log a completed trade on-chain (M-01: uses TradeSide enum)
+    /// Log a completed trade on-chain (M-01: uses TradeSide enum).
+    /// Signer must be vault.authority **or** the dedicated trade_logger pubkey.
     pub fn log_trade(ctx: Context<LogTradeCtx>, pair: String, side: TradeSide, ep: u64, xp: u64, bps: i32, usdt: i64, dur: u64) -> Result<()> {
         require!(pair.len() <= 16, VaultError::PairTooLong);
+        let signer = ctx.accounts.logger.key();
+        let allowed_logger = ctx.accounts.trade_logger.logger;
+        require!(
+            signer == ctx.accounts.vault.authority
+                || (allowed_logger != Pubkey::default() && signer == allowed_logger),
+            VaultError::Unauthorized
+        );
         let v = &mut ctx.accounts.vault;
         v.total_trades = v.total_trades.checked_add(1).ok_or(VaultError::MathOverflow)?;
         if bps > 0 { v.total_wins = v.total_wins.checked_add(1).ok_or(VaultError::MathOverflow)?; }
         v.cumulative_pnl_bps = v.cumulative_pnl_bps.checked_add(bps as i64).ok_or(VaultError::MathOverflow)?;
         emit!(TradeLogged { pair, side: side.to_string(), entry_price: ep, exit_price: xp, pnl_bps: bps, pnl_usdt: usdt, duration_secs: dur, vault_nav_after: v.nav_per_token(), vault_total_assets: v.total_assets, timestamp: Clock::get()?.unix_timestamp });
+        Ok(())
+    }
+
+    /// Assign the dedicated `log_trade` signer. Does not grant mint / pause / drain / NAV.
+    pub fn set_trade_logger(ctx: Context<SetTradeLoggerCtx>, logger: Pubkey) -> Result<()> {
+        let cfg = &mut ctx.accounts.trade_logger;
+        cfg.logger = logger;
+        cfg.bump = ctx.bumps.trade_logger;
+        emit!(TradeLoggerSet {
+            logger,
+            set_by: ctx.accounts.authority.key(),
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+        msg!("📝 trade_logger → {}", logger);
         Ok(())
     }
 
@@ -1012,9 +1058,27 @@ pub struct FundCtx<'info> {
 
 #[derive(Accounts)]
 pub struct LogTradeCtx<'info> {
+    #[account(mut)] pub logger: Signer<'info>,
+    #[account(mut, seeds = [b"vault"], bump = vault.bump)]
+    pub vault: Account<'info, VaultState>,
+    #[account(seeds = [b"trade-logger"], bump = trade_logger.bump)]
+    pub trade_logger: Account<'info, TradeLoggerConfig>,
+}
+
+#[derive(Accounts)]
+pub struct SetTradeLoggerCtx<'info> {
     #[account(mut)] pub authority: Signer<'info>,
     #[account(mut, seeds = [b"vault"], bump = vault.bump, has_one = authority @ VaultError::Unauthorized)]
     pub vault: Account<'info, VaultState>,
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = 8 + TradeLoggerConfig::INIT_SPACE,
+        seeds = [b"trade-logger"],
+        bump
+    )]
+    pub trade_logger: Account<'info, TradeLoggerConfig>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
