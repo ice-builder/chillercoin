@@ -22,6 +22,7 @@ function sighash(ns: string, name: string): Buffer {
 const [vaultPda] = PublicKey.findProgramAddressSync([Buffer.from("vault")], PROGRAM_ID);
 const [chillerMint] = PublicKey.findProgramAddressSync([Buffer.from("chiller-mint")], PROGRAM_ID);
 const [solVaultPda] = PublicKey.findProgramAddressSync([Buffer.from("sol-vault")], PROGRAM_ID);
+const [tradeLoggerPda] = PublicKey.findProgramAddressSync([Buffer.from("trade-logger")], PROGRAM_ID);
 const [programData] = PublicKey.findProgramAddressSync([PROGRAM_ID.toBuffer()], BPF_UPGRADEABLE);
 
 // ═══════════════════════════════════════════════
@@ -347,6 +348,26 @@ describe("$CHILLER SOL Vault (R6)", () => {
 
   // ─── 6. log_trade (M-3: TradeSide enum) ──────
   it("6. log_trade BTC LONG +2.1% (M-3: enum)", async () => {
+    const setData = Buffer.alloc(40);
+    sighash("global", "set_trade_logger").copy(setData, 0);
+    authorityKp.publicKey.toBuffer().copy(setData, 8);
+    await sendAndConfirmTransaction(
+      conn,
+      new Transaction().add(
+        new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: authorityKp.publicKey, isSigner: true, isWritable: true },
+            { pubkey: vaultPda, isSigner: false, isWritable: true },
+            { pubkey: tradeLoggerPda, isSigner: false, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          ],
+          data: setData,
+        })
+      ),
+      [authorityKp]
+    );
+
     const pair = "BTCUSDT";
     // TradeSide enum: Long = 0, Short = 1 (single byte for Borsh enum)
     const sideEnum = 0; // Long

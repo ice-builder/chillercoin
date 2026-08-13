@@ -12,6 +12,8 @@
     "scripts",
     "chiller-dashboard",
     "chiller-vault",
+    "site",
+    "features",
     ".github"
   ],
   "path_block_globs": [

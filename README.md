@@ -149,8 +149,9 @@ SPA for vault interaction (demo/live wiring depends on deployment).
 
 - NAV / portfolio view
 - Deposit SOL / withdraw $CHILLER (attested mint UX; open deposit disabled)
-- Trades tab reads `data/onchain-trades.json` (empty in demo until vault `log_trade` is live — **no yield promises**)
-- Network badge defaults to **DEMO**
+- Trades tab reads Solana `TradeLogged` events (public tape; **no yield promises**)
+- Same tape as `site/trades.html` for [chillercoin.io/trades.html](https://chillercoin.io/trades.html)
+- Network badge defaults to **DEMO** (deposits stay paper; trades are on-chain)
 - Multi-wallet: Phantom, Solflare, Backpack
 - Responsive layout
 

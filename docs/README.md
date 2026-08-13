@@ -10,7 +10,10 @@ Public compliance and product docs for `$CHILLER` (no secrets, no trading engine
 | [compliance-schema.sql](./compliance-schema.sql) | Off-chain tables for deposits / refunds |
 | [db-and-sequences.md](./db-and-sequences.md) | Happy / reject sequences |
 | [key-roles.md](./key-roles.md) | Split authority roles before value-at-risk |
+| [trade-feed.md](./trade-feed.md) | Public TradeLogged tape — browser reads Solana RPC |
 | [ops-runbook.md](./ops-runbook.md) | Deny, refund, pause — no live deposits yet |
+
+Feature registry (do not drop done UX/program behavior on deploy): `features/registry.json`. Gate: `node --test features/check-registry.mjs`.
 
 Push gate: `node scripts/public-push-audit.mjs` → `scripts/reports/LATEST.md`.
 

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>$CHILLER — On-chain trades</title>
+  <meta name="description" content="Closed sleeve trades published on Solana as TradeLogged. No yield is promised.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; frame-ancestors 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://api.devnet.solana.com https://*.solana.com https://solscan.io; form-action 'self'">
+  <link rel="stylesheet" href="trades.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="https://chillercoin.io">$CHILLER</a>
+    <nav>
+      <a href="https://chillercoin.io">Home</a>
+      <a href="https://app.chillercoin.io/#trades">App</a>
+      <a href="https://github.com/ice-builder/chillercoin">GitHub</a>
+    </nav>
+  </header>
+
+  <main>
+    <p class="kicker">Public tape · Solana devnet</p>
+    <h1>On-chain trades</h1>
+    <p class="lede">
+      Closed sleeve fills are logged with <code>log_trade</code> and show up here as
+      <code>TradeLogged</code> events. This is a record, not a return promise.
+    </p>
+
+    <section class="stats" aria-label="Tape stats">
+      <article><span class="label">Trades</span><strong id="s-n">—</strong></article>
+      <article><span class="label">Win rate</span><strong id="s-wr">—</strong></article>
+      <article><span class="label">Cumulative P&amp;L</span><strong id="s-pnl">—</strong></article>
+    </section>
+
+    <div class="toolbar">
+      <div class="filters" role="group">
+        <button type="button" class="chip active" data-filter="all">All</button>
+        <button type="button" class="chip" data-filter="long">Long</button>
+        <button type="button" class="chip" data-filter="short">Short</button>
+        <button type="button" class="chip" data-filter="win">Wins</button>
+        <button type="button" class="chip" data-filter="loss">Losses</button>
+      </div>
+      <input id="q" type="search" placeholder="Filter pair…">
+      <button type="button" class="chip" id="refresh">Refresh</button>
+    </div>
+
+    <p class="status" id="status">Loading Solana…</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Pair</th><th>Side</th><th>Entry</th><th>Exit</th>
+            <th>P&amp;L</th><th>Duration</th><th>NAV after</th><th>When</th><th>TX</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <p class="foot">
+      Program <code>7ayYqgiiBtXdk13f9DBFTxJoYKkZyr3AaaLt2f2TPDoH</code>
+      · Past prints are not future results.
+    </p>
+  </main>
+  <script src="js/onchain-trades.js"></script>
+  <script src="trades.js"></script>
+</body>
+</html>

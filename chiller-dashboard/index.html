@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>$CHILLER Dashboard — Vault Management</title>
     <meta name="description" content="Manage your $CHILLER vault: deposit SOL, withdraw, track NAV. No yield promises.">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; frame-ancestors 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' https://api.devnet.solana.com https://*.solana.com https://solscan.io; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; frame-ancestors 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' https://api.devnet.solana.com https://*.solana.com https://solscan.io http://127.0.0.1:8899 http://localhost:8899; form-action 'self'">
     <link rel="stylesheet" href="style.css">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧊</text></svg>">
 </head>
@@ -44,9 +44,9 @@
     </nav>
 
     <div class="sidebar-footer">
-        <div class="vault-status">
+        <div class="vault-status demo">
             <span class="pulse"></span>
-            <span>Vault Active — CEX sleeve</span>
+            <span>Demo — paper only, not live deposits</span>
         </div>
     </div>
 </aside>
@@ -78,6 +78,10 @@
             <a href="https://app.chillercoin.io" target="_blank" rel="noopener">app.chillercoin.io</a>
             · Program <code id="canonical-program-id">7ayYqgiiBtXdk13f9DBFTxJoYKkZyr3AaaLt2f2TPDoH</code>
             · Do not deposit via any other site or program id.
+        </div>
+        <div class="demo-banner" role="status">
+            Paper demo — no live vault, no yield. Connect <b>Demo Mode</b> to walk deposit → attested mint.
+            Trades are read from Solana <code>TradeLogged</code>, not from the trader host.
         </div>
         <!-- PAGE: Overview -->
         <div class="page active" id="page-overview">
@@ -230,17 +234,19 @@
             <div class="card">
                 <div class="card-header">
                     <h3>🔥 Recent Trades</h3>
-                    <span class="paper-badge" title="From vault log_trade events when live">Trades verified on-chain</span>
+                    <span class="paper-badge live-badge" id="trades-source-badge" title="Solana TradeLogged">Solana · on-chain</span>
                     <a class="nav-item" onclick="showPage('trades')" style="padding:4px 8px;font-size:12px;cursor:pointer;">View All →</a>
+                    <a class="nav-item" href="https://chillercoin.io/trades.html" target="_blank" rel="noopener" style="padding:4px 8px;font-size:12px;">Public tape →</a>
                 </div>
                 <div class="card-body" style="padding:0">
                     <p id="trades-feed-note" class="eligibility-copy" style="padding:12px 16px;margin:0" hidden></p>
+                    <div class="table-scroll">
                     <table class="trades-table" id="recent-trades-table">
                         <thead>
                             <tr>
                                 <th>Pair</th>
                                 <th>Side</th>
-                                <th>P&L</th>
+                                <th>P&amp;L</th>
                                 <th>Duration</th>
                                 <th>Time</th>
                                 <th>TX</th>
@@ -248,6 +254,7 @@
                         </thead>
                         <tbody id="recent-trades-body"></tbody>
                     </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -256,28 +263,42 @@
         <div class="page" id="page-trades">
             <div class="stats-grid" style="grid-template-columns: repeat(3, 1fr);">
                 <div class="stat-card">
-                    <div class="stat-label">Total Trades</div>
+                    <div class="stat-label">On-chain trades</div>
                     <div class="stat-value" id="trades-total">0</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-label">Win Rate</div>
+                    <div class="stat-label">Win rate</div>
                     <div class="stat-value profit" id="trades-winrate">0%</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-label">Cumulative P&L</div>
+                    <div class="stat-label">Cumulative P&amp;L</div>
                     <div class="stat-value profit" id="trades-pnl">+0.00%</div>
                 </div>
             </div>
 
             <div class="card">
-                <div class="card-header">
-                    <h3>📋 All Trades</h3>
-                    <span class="paper-badge" title="Closed sleeve trades via vault log_trade">Trades verified on-chain</span>
+                <div class="card-header trades-toolbar-header">
+                    <h3>On-chain tape</h3>
+                    <span class="paper-badge live-badge" id="trades-source-badge-all" title="Closed sleeve trades via vault log_trade">Solana · on-chain</span>
+                </div>
+                <div class="trades-toolbar">
+                    <div class="trade-filters" role="group" aria-label="Filter trades">
+                        <button type="button" class="trade-filter active" data-filter="all" onclick="setTradeFilter('all')">All</button>
+                        <button type="button" class="trade-filter" data-filter="long" onclick="setTradeFilter('long')">Long</button>
+                        <button type="button" class="trade-filter" data-filter="short" onclick="setTradeFilter('short')">Short</button>
+                        <button type="button" class="trade-filter" data-filter="win" onclick="setTradeFilter('win')">Wins</button>
+                        <button type="button" class="trade-filter" data-filter="loss" onclick="setTradeFilter('loss')">Losses</button>
+                    </div>
+                    <input class="trade-search" type="search" placeholder="Filter pair…" oninput="setTradeQuery(this.value)" aria-label="Filter by pair">
+                    <button type="button" class="trade-refresh" onclick="loadOnchainTrades()">Refresh</button>
                 </div>
                 <div class="card-body" style="padding:0">
-                    <p class="eligibility-copy" style="padding:12px 16px;margin:0">
-                        On-chain trade log for holders. Demo build shows an empty feed until vault go-live — no yield is promised.
+                    <p class="eligibility-copy" id="trades-page-copy" style="padding:12px 16px;margin:0">
+                        Closed sleeve trades from Solana <code>TradeLogged</code>.
+                        Same tape as <a href="https://chillercoin.io/trades.html" target="_blank" rel="noopener">chillercoin.io/trades</a>.
+                        No yield is promised.
                     </p>
+                    <div class="table-scroll">
                     <table class="trades-table">
                         <thead>
                             <tr>
@@ -285,15 +306,16 @@
                                 <th>Side</th>
                                 <th>Entry</th>
                                 <th>Exit</th>
-                                <th>P&L</th>
+                                <th>P&amp;L</th>
                                 <th>Duration</th>
-                                <th>NAV After</th>
+                                <th>NAV after</th>
                                 <th>Time</th>
                                 <th>TX</th>
                             </tr>
                         </thead>
                         <tbody id="all-trades-body"></tbody>
                     </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -424,8 +446,8 @@
                 <div class="wallet-option-left">
                     <div class="wallet-icon demo-icon">🧊</div>
                     <div>
-                        <div class="wallet-option-name">Demo Mode</div>
-                        <div class="wallet-option-desc">Eligible wallet — paper deposit flow</div>
+                        <div class="wallet-option-name">Demo Mode (recommended)</div>
+                        <div class="wallet-option-desc">Paper walkthrough: eligible → deposit → simulated mint</div>
                     </div>
                 </div>
             </button>
@@ -476,6 +498,7 @@
 <!-- Toast notification -->
 <div class="toast" id="toast"></div>
 
+<script src="js/onchain-trades.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

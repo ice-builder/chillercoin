@@ -43,6 +43,7 @@ function resolveProgramSo(): string {
 const [vaultPda] = PublicKey.findProgramAddressSync([Buffer.from("vault")], PROGRAM_ID);
 const [chillerMint] = PublicKey.findProgramAddressSync([Buffer.from("chiller-mint")], PROGRAM_ID);
 const [solVaultPda] = PublicKey.findProgramAddressSync([Buffer.from("sol-vault")], PROGRAM_ID);
+const [tradeLoggerPda] = PublicKey.findProgramAddressSync([Buffer.from("trade-logger")], PROGRAM_ID);
 const [programData] = PublicKey.findProgramAddressSync([PROGRAM_ID.toBuffer()], BPF_UPGRADEABLE);
 
 function attestationPda(nonce: Buffer): PublicKey {
@@ -93,6 +94,7 @@ describe("mint_with_attestation (Bankrun)", function () {
   let teamWallet: Keypair;
   let tradeWallet: Keypair;
   let userWallet: Keypair;
+  let loggerKp: Keypair;
   let banksClient: BanksClient;
   let userAta: PublicKey;
 
@@ -125,6 +127,7 @@ describe("mint_with_attestation (Bankrun)", function () {
     teamWallet = Keypair.generate();
     tradeWallet = Keypair.generate();
     userWallet = Keypair.generate();
+    loggerKp = Keypair.generate();
 
     const pdHeader = Buffer.alloc(128);
     pdHeader.writeUInt32LE(3, 0);
@@ -139,6 +142,7 @@ describe("mint_with_attestation (Bankrun)", function () {
         { address: teamWallet.publicKey, info: { lamports: LAMPORTS_PER_SOL, data: Buffer.alloc(0), owner: SystemProgram.programId, executable: false } },
         { address: tradeWallet.publicKey, info: { lamports: LAMPORTS_PER_SOL, data: Buffer.alloc(0), owner: SystemProgram.programId, executable: false } },
         { address: userWallet.publicKey, info: { lamports: 50 * LAMPORTS_PER_SOL, data: Buffer.alloc(0), owner: SystemProgram.programId, executable: false } },
+        { address: loggerKp.publicKey, info: { lamports: 10 * LAMPORTS_PER_SOL, data: Buffer.alloc(0), owner: SystemProgram.programId, executable: false } },
         { address: programData, info: { lamports: 10 * LAMPORTS_PER_SOL, data: pdHeader, owner: BPF_UPGRADEABLE, executable: false } },
       ]
     );
@@ -492,6 +496,118 @@ describe("mint_with_attestation (Bankrun)", function () {
       ],
       [authority]
     );
+  });
+
+  it("trade_logger can log_trade but not mint/pause/drain", async () => {
+    const setData = Buffer.alloc(40);
+    sighash("set_trade_logger").copy(setData, 0);
+    loggerKp.publicKey.toBuffer().copy(setData, 8);
+    await process(
+      [
+        new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+            { pubkey: vaultPda, isSigner: false, isWritable: true },
+            { pubkey: tradeLoggerPda, isSigner: false, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          ],
+          data: setData,
+        }),
+      ],
+      [authority]
+    );
+
+    const pair = "BTCUSDT";
+    const logData = Buffer.alloc(8 + 4 + pair.length + 1 + 8 + 8 + 4 + 8 + 8);
+    sighash("log_trade").copy(logData, 0);
+    logData.writeUInt32LE(pair.length, 8);
+    logData.write(pair, 12);
+    let o = 12 + pair.length;
+    logData.writeUInt8(0, o); o += 1;
+    logData.writeBigUInt64LE(BigInt(61000_000000), o); o += 8;
+    logData.writeBigUInt64LE(BigInt(62000_000000), o); o += 8;
+    logData.writeInt32LE(163, o); o += 4;
+    logData.writeBigInt64LE(BigInt(50_000000), o); o += 8;
+    logData.writeBigUInt64LE(BigInt(600), o);
+    await process(
+      [
+        new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: loggerKp.publicKey, isSigner: true, isWritable: true },
+            { pubkey: vaultPda, isSigner: false, isWritable: true },
+            { pubkey: tradeLoggerPda, isSigner: false, isWritable: false },
+          ],
+          data: logData,
+        }),
+      ],
+      [loggerKp]
+    );
+    console.log("    ✅ logger log_trade ok");
+
+    const pauseData = Buffer.alloc(9);
+    sighash("set_paused").copy(pauseData, 0);
+    pauseData[8] = 1;
+    try {
+      await process(
+        [
+          new TransactionInstruction({
+            programId: PROGRAM_ID,
+            keys: [
+              { pubkey: loggerKp.publicKey, isSigner: true, isWritable: true },
+              { pubkey: vaultPda, isSigner: false, isWritable: true },
+            ],
+            data: pauseData,
+          }),
+        ],
+        [loggerKp]
+      );
+      assert.fail("expected pause Unauthorized");
+    } catch (e: any) {
+      assert.ok(String(e.message || e).length > 0);
+      console.log("    ✅ logger pause Unauthorized");
+    }
+
+    const drainData = Buffer.alloc(16);
+    sighash("drain_to_trade").copy(drainData, 0);
+    drainData.writeBigUInt64LE(BigInt(1_000_000), 8);
+    try {
+      await process(
+        [
+          new TransactionInstruction({
+            programId: PROGRAM_ID,
+            keys: [
+              { pubkey: loggerKp.publicKey, isSigner: true, isWritable: true },
+              { pubkey: vaultPda, isSigner: false, isWritable: true },
+              { pubkey: solVaultPda, isSigner: false, isWritable: true },
+              { pubkey: tradeWallet.publicKey, isSigner: false, isWritable: true },
+            ],
+            data: drainData,
+          }),
+        ],
+        [loggerKp]
+      );
+      assert.fail("expected drain Unauthorized");
+    } catch (e: any) {
+      assert.ok(String(e.message || e).length > 0);
+      console.log("    ✅ logger drain Unauthorized");
+    }
+
+    const amount = BigInt(500_000_000);
+    const nonce = randomBytes(32);
+    const exp = BigInt(Math.floor(Date.now() / 1000) + 3600);
+    await fundTreasury(amount);
+    try {
+      await process(
+        [mintIx({ amount, nonce, exp, wallet: userWallet.publicKey, authority: loggerKp })],
+        [userWallet, loggerKp]
+      );
+      assert.fail("expected mint Unauthorized");
+    } catch (e: any) {
+      assert.ok(String(e.message || e).length > 0);
+      console.log("    ✅ logger mint Unauthorized");
+    }
   });
 });
 

@@ -246,12 +246,25 @@ body {
   color: var(--profit);
 }
 
-.vault-status .pulse {
-  width: 8px; height: 8px;
-  background: var(--profit);
-  border-radius: 50%;
-  animation: pulse 2s infinite;
+.vault-status.demo {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.25);
+  color: #f59e0b;
 }
+.vault-status.demo .pulse { background: #f59e0b; }
+
+.demo-banner {
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.demo-banner b { color: var(--text-primary); }
+.demo-banner code { font-size: 12px; }
 
 .canonical-strip {
   margin: 0 0 16px;
@@ -577,6 +590,52 @@ body {
 }
 
 .tx-link:hover { opacity: 1; text-decoration: underline; }
+
+.trades-toolbar-header { align-items: center; }
+.trades-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.trade-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.trade-filter, .trade-refresh {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--hover-bg);
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.trade-filter.active {
+  color: var(--accent);
+  border-color: var(--border-accent);
+  background: var(--accent-glow);
+}
+.trade-search {
+  margin-left: auto;
+  min-width: 160px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 13px;
+}
+.trades-empty {
+  opacity: .7;
+  padding: 20px 16px !important;
+  font-family: var(--font) !important;
+}
+.table-scroll { overflow-x: auto; }
+.mono-cell { font-family: var(--font-mono); }
+.live-badge { color: var(--profit); }
 
 /* ═══════════════════════════════════════════════
    Deposit / Withdraw Panel
